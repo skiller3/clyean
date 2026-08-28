@@ -1,12 +1,12 @@
-# zlop Contributor License Agreement
+# clyean Contributor License Agreement
 
 **Version 1.0, 27 August 2026**
 
 This Contributor License Agreement (the **"Agreement"**) is between **Skye
 Isard** (the **"Owner"**) and you, the person or entity identified by the
 GitHub account that signs this Agreement (**"You"**). It applies to the
-project **zlop** (<https://github.com/skiller3/zlop>) and to every repository
-the Owner designates as part of it (the **"Project"**).
+project **clyean** (<https://github.com/skiller3/clyean>) and to every
+repository the Owner designates as part of it (the **"Project"**).
 
 Please read this Agreement carefully. **It assigns to the Owner the copyright
 in the contributions you make to the Project.** You keep a broad licence back
@@ -18,7 +18,7 @@ copyright, do not contribute to this Project.
 
 The Owner is the sole copyright holder of the Project. Sole ownership lets the
 Owner license the Project under the GNU Affero General Public License v3 with
-the zlop Generated Output Exception, relicense it, enforce it, and change its
+the clyean Generated Output Exception, relicense it, enforce it, and change its
 terms in future without having to locate and obtain permission from every past
 contributor. This Agreement keeps that ownership undivided.
 
@@ -77,7 +77,7 @@ otherwise exploit your own Contributions, for any purpose and under any terms
 You choose, including in other projects and under other licences.
 
 You also retain all rights in any work of yours that is not a Contribution,
-and in anything You produce by *using* zlop, which is governed by
+and in anything You produce by *using* clyean, which is governed by
 `LICENSE-EXCEPTION-OUTPUT.md` and belongs to You.
 
 ## 5. Patent licence

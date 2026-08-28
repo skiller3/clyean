@@ -1,6 +1,6 @@
-# Contributing to zlop
+# Contributing to clyean
 
-Thanks for your interest in zlop. This document covers the legal side of
+Thanks for your interest in clyean. This document covers the legal side of
 contributing; project conventions live alongside the code as it lands.
 
 ## The short version
@@ -9,14 +9,14 @@ contributing; project conventions live alongside the code as it lands.
   request can be merged.** It is signed by posting one comment on your pull
   request, once, ever.
 - The CLA **assigns copyright in your contribution to Skye Isard**, the sole
-  copyright owner of zlop.
+  copyright owner of clyean.
 - You keep a broad, perpetual, irrevocable licence back to your own
   contribution (CLA section 4). You can reuse, republish, and relicense your
   own work elsewhere.
-- **Anything you generate by *using* zlop is yours**, not the project's, and
+- **Anything you generate by *using* clyean is yours**, not the project's, and
   carries no AGPL obligation. See
   [LICENSE-EXCEPTION-OUTPUT.md](LICENSE-EXCEPTION-OUTPUT.md). The CLA has
-  nothing to do with output; it governs contributions to zlop's own source.
+  nothing to do with output; it governs contributions to clyean's own source.
 
 ## Signing the CLA
 
@@ -59,16 +59,16 @@ you post it, and do not put it in a pull request.
 
 ## Licensing of what you write
 
-Contributions become part of zlop and are distributed under the GNU Affero
-General Public License v3 with the zlop Generated Output Exception. Because
+Contributions become part of clyean and are distributed under the GNU Affero
+General Public License v3 with the clyean Generated Output Exception. Because
 the Owner holds copyright in the whole project, the Owner may also license
-zlop under other terms, including commercial terms.
+clyean under other terms, including commercial terms.
 
 New source files should carry a header naming the owner and the licence:
 
 ```
 Copyright (C) 2026 Skye Isard
-SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-zlop-output-exception
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 ```
 
 Do not add your own copyright line to a file — under the CLA the copyright is

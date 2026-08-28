@@ -32,7 +32,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-document: 'https://github.com/skiller3/zlop/blob/main/CLA.md'
+          path-to-document: 'https://github.com/skiller3/clyean/blob/main/CLA.md'
           # Do NOT create this file by hand — the action creates it on the
           # first signature. A hand-created file makes the action fail.
           path-to-signatures: 'signatures/version1/cla.json'
@@ -43,19 +43,19 @@ jobs:
           create-file-commit-message: 'chore(cla): create CLA signature store'
           signed-commit-message: 'chore(cla): $contributorName signed the CLA in $owner/$repo#$pullRequestNo'
           custom-notsigned-prcomment: |
-            Thanks for contributing to zlop.
+            Thanks for contributing to clyean.
 
             Before this pull request can be merged, every contributor to it must sign the
-            [zlop Contributor License Agreement]($pathToCLADocument). The CLA **assigns
+            [clyean Contributor License Agreement]($pathToCLADocument). The CLA **assigns
             copyright in your contribution to Skye Isard**, the project's sole copyright
             owner, and grants you a broad licence back to your own work (CLA section 4).
 
-            Note that this is separate from what you *produce with* zlop: anything you
-            generate by running zlop is yours, under the
-            [zlop Generated Output Exception](https://github.com/skiller3/zlop/blob/main/LICENSE-EXCEPTION-OUTPUT.md).
+            Note that this is separate from what you *produce with* clyean: anything you
+            generate by running clyean is yours, under the
+            [clyean Generated Output Exception](https://github.com/skiller3/clyean/blob/main/LICENSE-EXCEPTION-OUTPUT.md).
 
             If you agree, post a new comment on this pull request containing exactly:
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
-          custom-allsigned-prcomment: '✅ All contributors to this pull request have signed the zlop CLA.'
+          custom-allsigned-prcomment: '✅ All contributors to this pull request have signed the clyean CLA.'
           # Locking after merge stops signatures being edited or deleted later.
           lock-pullrequest-aftermerge: true

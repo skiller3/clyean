@@ -8,7 +8,7 @@
 
 ## Checklist
 
-- [ ] I have read and signed the [Contributor License Agreement](https://github.com/skiller3/zlop/blob/main/CLA.md),
+- [ ] I have read and signed the [Contributor License Agreement](https://github.com/skiller3/clyean/blob/main/CLA.md),
       which **assigns copyright in this contribution to Skye Isard**. If I have
       not signed yet, the CLA Assistant bot will comment below with how to.
 - [ ] This work is mine to give: it is my original work, or every part that is

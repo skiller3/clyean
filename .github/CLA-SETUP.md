@@ -66,7 +66,7 @@ Import the ruleset in `.github/rulesets/require-cla.json`:
   select that file.
 - **CLI:**
   ```bash
-  gh api -X POST /repos/skiller3/zlop/rulesets \
+  gh api -X POST /repos/skiller3/clyean/rulesets \
     --input .github/rulesets/require-cla.json
   ```
 
