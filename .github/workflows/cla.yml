@@ -1,0 +1,61 @@
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# Explicit permissions, in case the repository's default GITHUB_TOKEN
+# permissions are read-only.
+permissions:
+  actions: write
+  contents: write # needed to commit signatures to the cla-signatures branch
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # The name of this job is the status check to require in the branch ruleset.
+  # See .github/rulesets/require-cla.json.
+  CLAAssistant:
+    name: CLA Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check or record CLA signature
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        # contributor-assistant/github-action v2.6.1, pinned to its commit SHA.
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: 'https://github.com/skiller3/zlop/blob/main/CLA.md'
+          # Do NOT create this file by hand — the action creates it on the
+          # first signature. A hand-created file makes the action fail.
+          path-to-signatures: 'signatures/version1/cla.json'
+          # Must be an existing, UNPROTECTED branch. See .github/CLA-SETUP.md.
+          branch: 'cla-signatures'
+          # The repository owner already holds copyright, and bots cannot sign.
+          allowlist: skiller3,bot*
+          create-file-commit-message: 'chore(cla): create CLA signature store'
+          signed-commit-message: 'chore(cla): $contributorName signed the CLA in $owner/$repo#$pullRequestNo'
+          custom-notsigned-prcomment: |
+            Thanks for contributing to zlop.
+
+            Before this pull request can be merged, every contributor to it must sign the
+            [zlop Contributor License Agreement]($pathToCLADocument). The CLA **assigns
+            copyright in your contribution to Skye Isard**, the project's sole copyright
+            owner, and grants you a broad licence back to your own work (CLA section 4).
+
+            Note that this is separate from what you *produce with* zlop: anything you
+            generate by running zlop is yours, under the
+            [zlop Generated Output Exception](https://github.com/skiller3/zlop/blob/main/LICENSE-EXCEPTION-OUTPUT.md).
+
+            If you agree, post a new comment on this pull request containing exactly:
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: '✅ All contributors to this pull request have signed the zlop CLA.'
+          # Locking after merge stops signatures being edited or deleted later.
+          lock-pullrequest-aftermerge: true

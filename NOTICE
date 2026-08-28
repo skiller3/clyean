@@ -1,0 +1,44 @@
+zlop — Zero slop agentic coding harness
+=======================================
+
+Copyright (C) 2026 Skye Isard <skye.isard@gmail.com>
+
+Skye Isard is the sole copyright owner of this project. Every contribution
+accepted into this repository is assigned to Skye Isard under the Contributor
+License Agreement in `CLA.md`, so that ownership of the project remains
+undivided.
+
+
+LICENSING SUMMARY
+-----------------
+
+This project is licensed to the public under the GNU Affero General Public
+License, version 3 only, as published by the Free Software Foundation. The
+full text is in `LICENSE`.
+
+That license is granted **with the zlop Generated Output Exception**, set out
+in `LICENSE-EXCEPTION-OUTPUT.md`. In short: material that you produce by
+running zlop is yours. The AGPL's copyleft terms apply to zlop itself, never
+to the code, documents, or other works zlop helps you create.
+
+    SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-zlop-output-exception
+
+`LICENSE-EXCEPTION-OUTPUT.md` is an integral part of the licensing offer made
+by the copyright owner. Distributors of zlop, including distributors of
+modified versions, must keep `NOTICE`, `LICENSE`, and
+`LICENSE-EXCEPTION-OUTPUT.md` together.
+
+
+OTHER LICENSES
+--------------
+
+As the sole copyright owner, Skye Isard may additionally license this project
+to any party under different terms, including commercial or proprietary terms.
+Enquiries: skye.isard@gmail.com
+
+
+WARRANTY
+--------
+
+There is no warranty for this program, to the extent permitted by applicable
+law. See sections 15 and 16 of `LICENSE`.
