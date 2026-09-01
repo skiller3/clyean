@@ -1,6 +1,6 @@
 # clyean
 
-Zero slop agentic coding harness
+Zero-slop agentic coding harness
 
 ## License
 
