@@ -1,0 +1,84 @@
+# Rust
+/target/
+**/target/
+*.rs.bk
+*.pdb
+*.profraw
+# Cargo.lock is intentionally tracked: clyean ships binaries.
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Emacs
+*~
+\#*\#
+.\#*
+*.elc
+.dir-locals-2.el
+auto-save-list/
+tramp
+.projectile
+
+# Claude Code
+.claude/settings.local.json
+.claude/logs/
+.claude/shell-snapshots/
+.claude/todos/
+.claude/statsig/
+CLAUDE.local.md
+
+# Oh My Pi
+*.omp.local.json
+.omp.cache/
+
+# Podman / containers
+.podman/
+compose.override.yml
+compose.override.yaml
+podman-compose.override.yml
+podman-compose.override.yaml
+*.container.local
+.containers/
+volumes/
+
+# Valkey
+*.rdb
+*.aof
+appendonlydir/
+dump.valkey
+nodes.conf
+valkey-data/
+*.local.conf
+
+# Secrets and local environment
+creds
+creds.md
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS and editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
