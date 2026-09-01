@@ -1,2 +1,0 @@
-# Purpose
-Clyean is an agentic programming harness designed to minimize the accumulation of technical debt (i.e. architectural and code quality slop) during iterative development of a software project.  It achieves this goal via use of multiple specialized agents that coordinate to maintain the speCifications, architectural design quality, test quality, code quality, security posture, documentation, 
