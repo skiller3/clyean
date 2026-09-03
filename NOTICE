@@ -3,10 +3,14 @@ clyean — Zero slop agentic coding harness
 
 Copyright (C) 2026 Skye Isard <skye.isard@gmail.com>
 
-Skye Isard is the sole copyright owner of this project. Every contribution
-accepted into this repository is assigned to Skye Isard under the Contributor
-License Agreement in `CLA.md`, so that ownership of the project remains
-undivided.
+Skye Isard is the sole copyright owner of the original work in this project.
+Every contribution accepted into this repository is assigned to Skye Isard
+under the Contributor License Agreement in `CLA.md`, so that ownership of the
+original work remains undivided.
+
+This repository also vendors third-party code under `vendor/`, which is not
+owned by Skye Isard and is licensed to you by its own copyright holders under
+its own terms. See `THIRD-PARTY CODE` below.
 
 
 LICENSING SUMMARY
@@ -27,6 +31,21 @@ never to the code, documents, or other works clyean helps you create.
 by the copyright owner. Distributors of clyean, including distributors of
 modified versions, must keep `NOTICE`, `LICENSE`, and
 `LICENSE-EXCEPTION-OUTPUT.md` together.
+
+
+THIRD-PARTY CODE
+----------------
+
+`vendor/omp` contains a fork of Oh-My-Pi (https://github.com/can1357/oh-my-pi),
+which is licensed under the MIT License. Its upstream license text and
+copyright notices are preserved at `vendor/omp/LICENSE` and must be retained in
+any redistribution of clyean. The MIT License permits inclusion in an
+AGPL-licensed work; the combined work is distributed under the AGPL terms
+described above, while the MIT-licensed portions remain available to you under
+MIT from their own copyright holders.
+
+Oh-My-Pi in turn vendors and depends on further third-party components, whose
+licenses and notices are recorded in `vendor/omp/THIRD-PARTY-NOTICES.txt`.
 
 
 OTHER LICENSES
