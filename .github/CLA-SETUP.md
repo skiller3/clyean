@@ -43,6 +43,21 @@ git push -u origin cla-signatures
 git switch main
 ```
 
+`git switch --orphan` empties the working tree, and switching back restores it.
+In a checkout that carries a large vendored tree (`vendor/omp` is roughly
+183 MB), that is two full rewrites of the working tree in order to create a
+commit containing nothing. The same branch can be built with plumbing instead,
+which touches no files and needs no clean working tree:
+
+```bash
+empty_tree=$(git mktree </dev/null)
+commit=$(git commit-tree "$empty_tree" -m "chore(cla): initialise CLA signature store")
+git push origin "$commit":refs/heads/cla-signatures
+```
+
+Both recipes produce the same branch: a single commit with no parent and an
+empty tree, authored by whoever runs it.
+
 Do **not** create `signatures/version1/cla.json` yourself. The action creates
 it on the first signature, and a hand-created file makes the action fail.
 
