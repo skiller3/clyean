@@ -58,8 +58,19 @@ git push origin "$commit":refs/heads/cla-signatures
 Both recipes produce the same branch: a single commit with no parent and an
 empty tree, authored by whoever runs it.
 
-Do **not** create `signatures/version1/cla.json` yourself. The action creates
-it on the first signature, and a hand-created file makes the action fail.
+Do **not** create `signatures/version1/cla.json` yourself. A hand-created file
+makes the action fail.
+
+The action creates that file itself, on its **first run against any pull
+request**, and not on the first signature. It is created even when no signature
+is required, such as when every committer on the pull request is covered by
+`allowlist`. That bootstrapping run then **fails**, reporting that committers
+have to sign the CLA, because the action creates the store and evaluates
+against it in the same pass.
+
+Creating the branch in step 1 is therefore necessary but not sufficient. Expect
+the first `CLA Assistant` check after setup to go red once, then re-run it. The
+re-run finds the file in place and passes.
 
 ### 2. Allow Actions to write to the repository
 
