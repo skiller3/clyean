@@ -33,8 +33,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-document: 'https://github.com/skiller3/clyean/blob/main/CLA.md'
-          # Do NOT create this file by hand — the action creates it on the
-          # first signature. A hand-created file makes the action fail.
+          # Do NOT create this file by hand; a hand-created file makes the
+          # action fail. The action creates it on its first run against a pull
+          # request, even when no signature is needed, and that bootstrapping
+          # run fails while doing so. Re-run the check once the file exists.
           path-to-signatures: 'signatures/version1/cla.json'
           # Must be an existing, UNPROTECTED branch. See .github/CLA-SETUP.md.
           branch: 'cla-signatures'

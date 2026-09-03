@@ -43,8 +43,34 @@ git push -u origin cla-signatures
 git switch main
 ```
 
-Do **not** create `signatures/version1/cla.json` yourself. The action creates
-it on the first signature, and a hand-created file makes the action fail.
+`git switch --orphan` empties the working tree, and switching back restores it.
+In a checkout that carries a large vendored tree (`vendor/omp` is roughly
+183 MB), that is two full rewrites of the working tree in order to create a
+commit containing nothing. The same branch can be built with plumbing instead,
+which touches no files and needs no clean working tree:
+
+```bash
+empty_tree=$(git mktree </dev/null)
+commit=$(git commit-tree "$empty_tree" -m "chore(cla): initialise CLA signature store")
+git push origin "$commit":refs/heads/cla-signatures
+```
+
+Both recipes produce the same branch: a single commit with no parent and an
+empty tree, authored by whoever runs it.
+
+Do **not** create `signatures/version1/cla.json` yourself. A hand-created file
+makes the action fail.
+
+The action creates that file itself, on its **first run against any pull
+request**, and not on the first signature. It is created even when no signature
+is required, such as when every committer on the pull request is covered by
+`allowlist`. That bootstrapping run then **fails**, reporting that committers
+have to sign the CLA, because the action creates the store and evaluates
+against it in the same pass.
+
+Creating the branch in step 1 is therefore necessary but not sufficient. Expect
+the first `CLA Assistant` check after setup to go red once, then re-run it. The
+re-run finds the file in place and passes.
 
 ### 2. Allow Actions to write to the repository
 
