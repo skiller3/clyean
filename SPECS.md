@@ -43,6 +43,7 @@ Clyean's sandboxing behavior should be enforced as follows:
 - The Podman-based architecture should deterministaclly ensure agents NEVER modify file content outside of the specified workspace.
 - By default, all agents should be instructed to never modify file system content outside of the project directory unless directly and explicitly instructed to do so.
 - With the exception of the "Product Director" agent being capable of pushing changes to remote repositories and issuing pull requests, all agents should be instructed by default to never modify the state of any connected system (via MCP, API, UI, or otherwise) unless directly and explicitly instructed to do so. 
+- As a further exception, the "Chief of Staff" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
 
