@@ -7,7 +7,7 @@ Zero-slop agentic coding harness
 Copyright (C) 2026 Skye Isard.
 
 Clyean is licensed under the [GNU Affero General Public License v3](LICENSE),
-**with the [clyean Generated Output Exception](LICENSE-EXCEPTION-OUTPUT.md)**.
+**with the [Clyean Generated Output Exception](LICENSE-EXCEPTION-OUTPUT.md)**.
 
 ```
 SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
@@ -30,7 +30,7 @@ helps you produce. Explicitly:
 - **No conditions.**  No attribution, no notice, no source disclosure is
   required for the parts of Clyean that end up embedded in your output.
 
-The one thing the exception does not do is let you redistribute clyean *itself*
+The one thing the exception does not do is let you redistribute Clyean *itself*
 outside the AGPL. See [LICENSE-EXCEPTION-OUTPUT.md](LICENSE-EXCEPTION-OUTPUT.md)
 for the operative text.
 
