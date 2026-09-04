@@ -43,6 +43,7 @@ Clyean's sandboxing behavior should be enforced as follows:
 - The Podman-based architecture should deterministaclly ensure agents NEVER modify file content outside of the specified workspace.
 - By default, all agents should be instructed to never modify file system content outside of the project directory unless directly and explicitly instructed to do so.
 - With the exception of the "Product Director" agent being capable of pushing changes to remote repositories and issuing pull requests, all agents should be instructed by default to never modify the state of any connected system (via MCP, API, UI, or otherwise) unless directly and explicitly instructed to do so. 
+- As a further exception, the "Chief of Staff" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
 
@@ -60,4 +61,81 @@ These paths and variables are an explicit exception to the rebranding requiremen
 
 # Agents
 
-# Agent Multiplexer Compatibility
+# Herdr Compatibility
+
+Herdr (`https://herdr.dev/`) is a terminal workspace manager for coding agents.  It keeps panes alive across disconnects, renders per-agent status (idle, working, blocked) in a sidebar, and exposes a socket API that lets an agent split panes, prompt other agents, and wait until a peer is genuinely blocked.  Upstream `omp` is one of the few agents Herdr grants full lifecycle authority, and Clyean must reach parity with that behavior.
+
+Herdr has no built-in knowledge of Clyean, and acquiring it would require a new Herdr binary release, because foreground process detection, agent labels, bundled screen-detection manifests, and `herdr integration install <agent>` are all compiled into the Herdr executable.  Every requirement in this section must therefore be satisfied by Clyean alone, against Herdr's published socket API and the extension surface Clyean already inherits from the contained harness.  Clyean must not depend on any change to Herdr.
+
+## Detection and inert behavior outside Herdr
+
+- Clyean must behave identically to its non-Herdr behavior when it is not running inside a Herdr pane.  Every requirement below is inert in that case.
+- Treat `HERDR_ENV=1`, or the presence of any of `HERDR_PANE_ID`, `HERDR_TAB_ID`, or `HERDR_WORKSPACE_ID`, as the signal that Clyean is running inside a Herdr pane.  The identity variables are the fallback because `HERDR_ENV` does not survive every environment-sanitizing launcher.
+- Never treat the client-side variables (`HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_SESSION`, `HERDR_CONFIG_PATH`, `HERDR_CLIENT_SOCKET_PATH`) as a detection signal, since they can legitimately be set outside a Herdr pane.  This mirrors the contained harness's own `isInsideHerdr()` logic.
+- Perform no reporting at all unless `HERDR_ENV=1` and both `HERDR_PANE_ID` and `HERDR_SOCKET_PATH` are set.
+
+## Preserved harness integration surface
+
+The following pieces of the contained harness are the integration contract that Herdr compatibility depends on.  They are an explicit exception to the option-pruning allowance in the "Basic User Experience" section, must survive rebranding, and must be re-verified on every `git subtree pull` from upstream.
+
+- Extension discovery under the user-level `~/.omp/agent/extensions` directory and the project-level `.omp/` directory.
+- The extension event names `session_start`, `session_switch`, `agent_start`, `agent_end`, `tool_approval_requested`, `tool_approval_resolved`, `tool_execution_start`, and `tool_execution_end`, along with their payload fields.
+- The custom event bus (`pi.events`) and its `herdr:blocked` event.
+- The context accessors `ctx.hasUI`, `ctx.isIdle()`, `ctx.sessionManager.getSessionFile()`, and `ctx.sessionManager.getSessionId()`.
+- The ability for extension code to open a Unix domain socket (`node:net`) from within the agent process.
+- Upstream's Herdr-aware terminal multiplexer detection in the TUI layer, so synchronized output, resize handling, and graphics capability gating behave under Clyean exactly as they do under `omp`.
+
+## Clyean ships its own state reporter
+
+- Clyean must scaffold and maintain its own Herdr state-reporting extension.  It must not require `herdr integration install clyean` (which does not exist), must not fail or degrade because that command is unavailable, and must not depend on Herdr writing anything into the host's `~/.omp` directory.
+- The extension is delivered through `.clyean-container-root` so that it is present at `~/.omp/agent/extensions/` inside the Chief of Staff agent's container.
+- The extension is Clyean-managed rather than user-managed.  It must carry an integration version marker, be replaced when Clyean upgrades it, and state in a header comment that user customizations belong in sibling files rather than in edits to it.
+- Reports must identify themselves with the source `custom:clyean` and the agent label `clyean`.
+- Exactly one reporter may claim a pane.  Herdr's own `herdr:omp` integration file must never be shipped into or installed within a Clyean container.
+
+## Reported agent state
+
+- Report state with the `pane.report_agent` method, using only the `idle`, `working`, and `blocked` states.
+- Report `working` from the start of an agent turn until the turn ends.
+- Report `blocked` while any tool approval is outstanding and while the `ask` tool is awaiting an answer.  Overlapping blocks must be reference counted so that resolving one of several does not prematurely clear the state.  The reported message should be the approval reason or the first question text, so the sidebar explains what the agent is waiting on.
+- Report `idle` otherwise, debounced (default 250 ms, overridable by environment variable) so that brief gaps between turns do not flicker the sidebar.
+- Hold `working` through retryable provider failures (overload, rate limiting, 5xx responses, and transport resets) for a grace period (default 2500 ms, overridable by environment variable) before falling through to `blocked`, so that automatic retries are not misreported as idle.
+- Stamp every report with a monotonically increasing sequence number, serialize reports through a single queue, and ensure a duplicate or late turn-end event cannot publish a false `idle`.
+- Call `pane.release_agent` only when the user or the process genuinely quits.  Internal lifecycle actions that tear down and rebind the extension runtime (`/reload`, `/new`, `/resume`, and `/fork` in upstream terms) must not release Herdr authority, because the replacement runtime still owns the pane.
+- Speak newline-delimited JSON, one request per line, over the Unix domain socket.  Use bounded connect and write timeouts with a single retry, and fail open.  Herdr being slow, stopped, or absent must never block, stall, or fail an agent turn.
+
+## Only the Chief of Staff reports
+
+- The Chief of Staff agent is the sole reporter of agent state, session identity, and pane metadata.  Every other Clyean agent must stay silent on the Herdr socket for these purposes.
+- Silence must be enforced by two independent gates: the harness root-session check (`ctx.hasUI === true`) and Clyean's own agent-role identity.
+- This is required because all of a project's agents share the single pane the user attaches to with `podman exec -it`.  Multiple reporters would contend for one pane's status and produce misleading sidebar state.
+- Because the Chief of Staff coordinates the other agents, Clyean must surface orchestration-level waiting through the same channel.  When the Chief of Staff is awaiting the user for something that is neither a tool approval nor an `ask` question (a specification or plan review, for example), Clyean must emit `herdr:blocked` on the custom event bus with a human-readable label, and clear it when the wait is satisfied.
+
+## Session identity
+
+- Report the Chief of Staff's session reference with `pane.report_agent_session` on session start, on session switch or resume, and at turn start, preferring `agent_session_path` over `agent_session_id`.
+- The reported path must be absolute and resolvable by Herdr, which runs on the host rather than in the container.  Clyean must translate the container-side session file path to its host equivalent using the project's mount mapping, and must omit the path (falling back to the session id) when no host-visible equivalent exists.
+- Clyean must not depend on Herdr-driven session resume, since Herdr has no Clyean resume command to launch.  Session identity is reported for status rollups, pane history, and handoff.
+
+## Environment propagation and socket access
+
+- Propagate `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, and `HERDR_SOCKET_PATH` into the Chief of Staff agent's container.
+- Resolve the host socket from `HERDR_SOCKET_PATH` rather than assuming the default location, because named Herdr sessions place their socket under `~/.config/herdr/sessions/<name>/`.
+- Bind-mount the resolved host socket into the container with read-write access, and rewrite `HERDR_SOCKET_PATH` in the container environment to the in-container mount path.
+- **This mount is an explicit exception to the "Sandboxing, Workspaces & Mounts" section.**  The Chief of Staff agent is granted the full Herdr socket API, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, and `agent.start`) and control of panes that do not belong to the project.  Clyean interacts with Herdr in a manner identical to `omp`, so the socket must not be filtered, proxied, or otherwise reduced.  Alongside the Product Director agent's remote repository access, this is a sanctioned route out of the sandbox and must be documented as such for users.
+- When the `herdr` executable is present on the host, mount it read-only into the container and propagate `HERDR_BIN_PATH`, so that Chief of Staff tooling which shells out to the Herdr CLI works as it does under `omp`.  Its absence must not be an error.
+
+## Pane presentation
+
+- Clyean must not rely on Herdr's foreground process detection or its screen-detection manifests for agent state.  Herdr sees `podman` as the pane's foreground process and has no Clyean manifest, and in any case a lifecycle report is the highest status authority and supersedes both.
+- Set the pane's displayed identity explicitly with `pane.report_metadata`, supplying "Clyean" as the display agent and a pane title derived from the project, rather than expecting Herdr to label the pane correctly on its own.
+
+## Verification and documentation
+
+- Integration tests must run the reporter against a stub socket server and assert the exact JSON frames emitted for each lifecycle transition, covering blocked reference counting, the retry hold, sequence monotonicity, release on quit only, and silence from every agent other than the Chief of Staff.
+- A test must assert that no socket traffic is attempted and no failure occurs when the Herdr environment variables are absent.
+- The `docs` directory must contain a how-to guide for running Clyean inside Herdr, including the sandboxing exception above and its implications.
+
+## Out of scope
+
+Native Herdr support for Clyean is deferred and must not be a prerequisite for anything above.  This includes `herdr integration install clyean`, foreground process detection of the `clyean` binary, a bundled screen-detection manifest, and Herdr-driven session resume.  If Herdr later ships first-class Clyean support, Clyean must detect it and defer to it rather than reporting twice for the same pane.
