@@ -1,4 +1,4 @@
-clyean — Zero slop agentic coding harness
+Clyean — Zero slop agentic coding harness
 =========================================
 
 Copyright (C) 2026 Skye Isard <skye.isard@gmail.com>
@@ -20,15 +20,15 @@ This project is licensed to the public under the GNU Affero General Public
 License, version 3 only, as published by the Free Software Foundation. The
 full text is in `LICENSE`.
 
-That license is granted **with the clyean Generated Output Exception**, set
+That license is granted **with the Clyean Generated Output Exception**, set
 out in `LICENSE-EXCEPTION-OUTPUT.md`. In short: material that you produce by
-running clyean is yours. The AGPL's copyleft terms apply to clyean itself,
-never to the code, documents, or other works clyean helps you create.
+running Clyean is yours. The AGPL's copyleft terms apply to Clyean itself,
+never to the code, documents, or other works Clyean helps you create.
 
     SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
 `LICENSE-EXCEPTION-OUTPUT.md` is an integral part of the licensing offer made
-by the copyright owner. Distributors of clyean, including distributors of
+by the copyright owner. Distributors of Clyean, including distributors of
 modified versions, must keep `NOTICE`, `LICENSE`, and
 `LICENSE-EXCEPTION-OUTPUT.md` together.
 
@@ -39,7 +39,7 @@ THIRD-PARTY CODE
 `vendor/omp` contains a fork of Oh-My-Pi (https://github.com/can1357/oh-my-pi),
 which is licensed under the MIT License. Its upstream license text and
 copyright notices are preserved at `vendor/omp/LICENSE` and must be retained in
-any redistribution of clyean. The MIT License permits inclusion in an
+any redistribution of Clyean. The MIT License permits inclusion in an
 AGPL-licensed work; the combined work is distributed under the AGPL terms
 described above, while the MIT-licensed portions remain available to you under
 MIT from their own copyright holders.
