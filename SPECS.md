@@ -61,6 +61,7 @@ These paths and variables are an explicit exception to the rebranding requiremen
 
 # Agents
 
+
 # Herdr Compatibility
 
 Herdr (`https://herdr.dev/`) is a terminal workspace manager for coding agents.  It keeps panes alive across disconnects, renders per-agent status (idle, working, blocked) in a sidebar, and exposes a socket API that lets an agent split panes, prompt other agents, and wait until a peer is genuinely blocked.  Upstream `omp` is one of the few agents Herdr grants full lifecycle authority, and Clyean must reach parity with that behavior.
@@ -139,3 +140,17 @@ The following pieces of the contained harness are the integration contract that 
 ## Out of scope
 
 Native Herdr support for Clyean is deferred and must not be a prerequisite for anything above.  This includes `herdr integration install clyean`, foreground process detection of the `clyean` binary, a bundled screen-detection manifest, and Herdr-driven session resume.  If Herdr later ships first-class Clyean support, Clyean must detect it and defer to it rather than reporting twice for the same pane.
+
+
+# Code
+
+Clyean's software logic (other than the built-in Podman functionality, built-in `omp` functionality, and the installation scripts) should be implemented via the Rust programming language (https://rust-lang.org/) and commonly used Rust crates (i.e. packages).  Ensure you adhere to the following software development best practices ordered from most to least important:
+
+- Accurate, descriptive, and concise naming of variables, functions, modules, macros, files, etc.
+- Upholding the Principle of Least Astonishment (POLA)
+- Rigorous factoring and refactoring of code to separate concerns
+- SOLID (https://en.wikipedia.org/wiki/SOLID)
+- Don't Repeat Yourself (DRY)
+- Rust developer community norms and idioms
+
+
