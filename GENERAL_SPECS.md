@@ -61,6 +61,9 @@ These paths and variables are an explicit exception to the rebranding requiremen
 
 # Agents
 
+Clyean is a system of several specialized agents that coordinate to perform work, and the specification of those agents lives in a companion file, `AGENT_SPECS.md`.  Ingest `AGENT_SPECS.md` in full alongside this file before doing any work; it carries the same authority as this file, and every agent named here (the User Assistant and the Product Director, for example) is defined there.
+
+Keep the division between the two files intact as they evolve.  Requirements that describe Clyean as a whole, or that hold regardless of which agent is acting, belong in this file.  The roster of agents and each agent's responsibilities, baseline instructions, tool and MCP scoping, model configuration, and interactions with the other agents belong in `AGENT_SPECS.md`.
 
 # Herdr Compatibility
 
