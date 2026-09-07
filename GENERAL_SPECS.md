@@ -8,7 +8,7 @@ From a UX perspective, `clyean` is primarily a CLI program that launches a termi
   - MCP (`/mcp`) commands and server connections should be supported with the enhancement of generally being scoped to particular agents (it shouldn't be assumed that all agents that coordinate to perform a unit of work should have access to the same MCP servers).
   - Model (`/model`) and switch (`/switch`) commands need to be adjusted to ensure model connections, authentication mechanisms, and usage parameters are scoped to specific agents.
 
-IMPORTANT: When the user passes prompts to the Clyean CLI/TUI, they should be directly interacting with the "Chief-of-Staff" agent, which is itself one of several agents specified in this file's "Agents" section.
+IMPORTANT: When the user passes prompts to the Clyean CLI/TUI, they should be directly interacting with the "User Assistant" agent, which is itself one of several agents specified in this file's "Agents" section.
 
 # Installation
 Users are expected to install the latest release (or any specific release via a passed release version argument) via one of two scripts:
@@ -23,7 +23,7 @@ No `clyean.com` website is currently launched; please just author the two instal
 Unless otherwise specified via arguments in a fashion that mirrors `omp`'s behavior, the `clyean` executable should assume the current working directory of its process represents a "project" for which it is going to be used to perform work.  If a `.clyean-project.json` file exists within the project directory, Clyean should consider the project to be scaffolded; if the file doesn't exist, then `clyean` should immediately scaffold the project by creating the following resources in the project's top-level directory:
 
 - `.clyean-project.json` JSON file - Contains the overall top-level configuration of the Clyean project.  Among other information, the file must contain (i) the version of `clyean` that initially generated the scaffolding, (ii) the UTC timestamp at which the scaffolding was initially generated, (iii) the initial Podman/Docker image used for the project's agent sandboxes, (iv) the workspace path to be used in conjunction with the project, (v) any additional mounts and podman run arguments that should be used for running agents on behalf of the project.  Unless specified by the user, the initial image used for a project's agent sandboxes should be `ubuntu:latest`.
-- `.clyean-agents` directory - Contains base instructions (per typical `AGENTS.md` files) and omp-compatible configurations of the various agents comprising `clyean` as a system.  The base instruction files are expected to adhere to the pattern `AGENTS__<AGENT_NAME>.md` (e.g. `AGENTS__CHIEF_OF_STAFF.md`).
+- `.clyean-agents` directory - Contains base instructions (per typical `AGENTS.md` files) and omp-compatible configurations of the various agents comprising `clyean` as a system.  The base instruction files are expected to adhere to the pattern `AGENTS__<AGENT_NAME>.md` (e.g. `AGENTS__USER_ASSISTANT.md`).
 - `.clyean-architecture` directory - Contains up-to-date UML architecture diagrams spanning all 14 official UML diagram types for the project.  The UML diagrams should be represented both as (i) Mermaid (*.mermaid) files and (ii) PDF (*.pdf) files generated directly from the Mermaid files.
 - `.clyean-specs.md` markdown file - Contains up-to-date specifications (i.e. requirements) for the project.
 - `.clyean-container-root` directory - Contains file materials to be mounted at the root of Podman containers used to run Clyean agents.
@@ -43,11 +43,11 @@ Clyean's sandboxing behavior should be enforced as follows:
 - The Podman-based architecture should deterministaclly ensure agents NEVER modify file content outside of the specified workspace.
 - By default, all agents should be instructed to never modify file system content outside of the project directory unless directly and explicitly instructed to do so.
 - With the exception of the "Product Director" agent being capable of pushing changes to remote repositories and issuing pull requests, all agents should be instructed by default to never modify the state of any connected system (via MCP, API, UI, or otherwise) unless directly and explicitly instructed to do so. 
-- As a further exception, the "Chief of Staff" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
+- As a further exception, the "User Assistant" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
 
-Clyean *contains* a fork of `omp` and sits above it: Clyean's own code is an orchestration layer that coordinates communication between multiple agents, each of which runs independently on the contained harness.  The rebranding, option-pruning, and per-agent scoping requirements in the "Basic User Experience" section describe changes to the contained harness; the user is expected to interact with a "Chief of Staff" agent via `podman exec -it`.
+Clyean *contains* a fork of `omp` and sits above it: Clyean's own code is an orchestration layer that coordinates communication between multiple agents, each of which runs independently on the contained harness.  The rebranding, option-pruning, and per-agent scoping requirements in the "Basic User Experience" section describe changes to the contained harness; the user is expected to interact with a "User Assistant" agent via `podman exec -it`.
 
 The `omp` fork is vendored into this repository at `vendor/omp` as a `git subtree`, tracked against the `upstream` remote (`https://github.com/can1357/oh-my-pi`, push disabled).  Upstream changes are taken with `git subtree pull --prefix=vendor/omp upstream main`.  Upstream tags are deliberately not fetched so they cannot collide with Clyean's own semantic version tags.  Modifications to the harness are made in place under `vendor/omp` and should be kept as narrow and as well isolated as practical, since every additional point of divergence is a conflict to resolve on each upstream pull.
 
@@ -89,7 +89,7 @@ The following pieces of the contained harness are the integration contract that 
 ## Clyean ships its own state reporter
 
 - Clyean must scaffold and maintain its own Herdr state-reporting extension.  It must not require `herdr integration install clyean` (which does not exist), must not fail or degrade because that command is unavailable, and must not depend on Herdr writing anything into the host's `~/.omp` directory.
-- The extension is delivered through `.clyean-container-root` so that it is present at `~/.omp/agent/extensions/` inside the Chief of Staff agent's container.
+- The extension is delivered through `.clyean-container-root` so that it is present at `~/.omp/agent/extensions/` inside the User Assistant agent's container.
 - The extension is Clyean-managed rather than user-managed.  It must carry an integration version marker, be replaced when Clyean upgrades it, and state in a header comment that user customizations belong in sibling files rather than in edits to it.
 - Reports must identify themselves with the source `custom:clyean` and the agent label `clyean`.
 - Exactly one reporter may claim a pane.  Herdr's own `herdr:omp` integration file must never be shipped into or installed within a Clyean container.
@@ -105,26 +105,26 @@ The following pieces of the contained harness are the integration contract that 
 - Call `pane.release_agent` only when the user or the process genuinely quits.  Internal lifecycle actions that tear down and rebind the extension runtime (`/reload`, `/new`, `/resume`, and `/fork` in upstream terms) must not release Herdr authority, because the replacement runtime still owns the pane.
 - Speak newline-delimited JSON, one request per line, over the Unix domain socket.  Use bounded connect and write timeouts with a single retry, and fail open.  Herdr being slow, stopped, or absent must never block, stall, or fail an agent turn.
 
-## Only the Chief of Staff reports
+## Only the User Assistant reports
 
-- The Chief of Staff agent is the sole reporter of agent state, session identity, and pane metadata.  Every other Clyean agent must stay silent on the Herdr socket for these purposes.
+- The User Assistant agent is the sole reporter of agent state, session identity, and pane metadata.  Every other Clyean agent must stay silent on the Herdr socket for these purposes.
 - Silence must be enforced by two independent gates: the harness root-session check (`ctx.hasUI === true`) and Clyean's own agent-role identity.
 - This is required because all of a project's agents share the single pane the user attaches to with `podman exec -it`.  Multiple reporters would contend for one pane's status and produce misleading sidebar state.
-- Because the Chief of Staff coordinates the other agents, Clyean must surface orchestration-level waiting through the same channel.  When the Chief of Staff is awaiting the user for something that is neither a tool approval nor an `ask` question (a specification or plan review, for example), Clyean must emit `herdr:blocked` on the custom event bus with a human-readable label, and clear it when the wait is satisfied.
+- Because the User Assistant coordinates the other agents, Clyean must surface orchestration-level waiting through the same channel.  When the User Assistant is awaiting the user for something that is neither a tool approval nor an `ask` question (a specification or plan review, for example), Clyean must emit `herdr:blocked` on the custom event bus with a human-readable label, and clear it when the wait is satisfied.
 
 ## Session identity
 
-- Report the Chief of Staff's session reference with `pane.report_agent_session` on session start, on session switch or resume, and at turn start, preferring `agent_session_path` over `agent_session_id`.
+- Report the User Assistant's session reference with `pane.report_agent_session` on session start, on session switch or resume, and at turn start, preferring `agent_session_path` over `agent_session_id`.
 - The reported path must be absolute and resolvable by Herdr, which runs on the host rather than in the container.  Clyean must translate the container-side session file path to its host equivalent using the project's mount mapping, and must omit the path (falling back to the session id) when no host-visible equivalent exists.
 - Clyean must not depend on Herdr-driven session resume, since Herdr has no Clyean resume command to launch.  Session identity is reported for status rollups, pane history, and handoff.
 
 ## Environment propagation and socket access
 
-- Propagate `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, and `HERDR_SOCKET_PATH` into the Chief of Staff agent's container.
+- Propagate `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, and `HERDR_SOCKET_PATH` into the User Assistant agent's container.
 - Resolve the host socket from `HERDR_SOCKET_PATH` rather than assuming the default location, because named Herdr sessions place their socket under `~/.config/herdr/sessions/<name>/`.
 - Bind-mount the resolved host socket into the container with read-write access, and rewrite `HERDR_SOCKET_PATH` in the container environment to the in-container mount path.
-- **This mount is an explicit exception to the "Sandboxing, Workspaces & Mounts" section.**  The Chief of Staff agent is granted the full Herdr socket API, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, and `agent.start`) and control of panes that do not belong to the project.  Clyean interacts with Herdr in a manner identical to `omp`, so the socket must not be filtered, proxied, or otherwise reduced.  Alongside the Product Director agent's remote repository access, this is a sanctioned route out of the sandbox and must be documented as such for users.
-- When the `herdr` executable is present on the host, mount it read-only into the container and propagate `HERDR_BIN_PATH`, so that Chief of Staff tooling which shells out to the Herdr CLI works as it does under `omp`.  Its absence must not be an error.
+- **This mount is an explicit exception to the "Sandboxing, Workspaces & Mounts" section.**  The User Assistant agent is granted the full Herdr socket API, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, and `agent.start`) and control of panes that do not belong to the project.  Clyean interacts with Herdr in a manner identical to `omp`, so the socket must not be filtered, proxied, or otherwise reduced.  Alongside the Product Director agent's remote repository access, this is a sanctioned route out of the sandbox and must be documented as such for users.
+- When the `herdr` executable is present on the host, mount it read-only into the container and propagate `HERDR_BIN_PATH`, so that User Assistant tooling which shells out to the Herdr CLI works as it does under `omp`.  Its absence must not be an error.
 
 ## Pane presentation
 
@@ -133,7 +133,7 @@ The following pieces of the contained harness are the integration contract that 
 
 ## Verification and documentation
 
-- Integration tests must run the reporter against a stub socket server and assert the exact JSON frames emitted for each lifecycle transition, covering blocked reference counting, the retry hold, sequence monotonicity, release on quit only, and silence from every agent other than the Chief of Staff.
+- Integration tests must run the reporter against a stub socket server and assert the exact JSON frames emitted for each lifecycle transition, covering blocked reference counting, the retry hold, sequence monotonicity, release on quit only, and silence from every agent other than the User Assistant.
 - A test must assert that no socket traffic is attempted and no failure occurs when the Herdr environment variables are absent.
 - The `docs` directory must contain a how-to guide for running Clyean inside Herdr, including the sandboxing exception above and its implications.
 
