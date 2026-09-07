@@ -27,7 +27,7 @@ Clyean is an agentic programming harness designed to minimize the accumulation o
 This project was born from frustration with Slop Debt (see `https://arpitbhayani.me/blogs/slop-debt/`).
 
 # Specifications
-`SPECS.md` contains Clyean's specifications — **read them before doing any work!**
+`GENERAL_SPECS.md` contains Clyean's specifications — **read them before doing any work!**
 
 # Key Resources
 - `git` CLI - Use this for any Git operations
@@ -43,7 +43,7 @@ This project was born from frustration with Slop Debt (see `https://arpitbhayani
     - Conditioned upon the preceding automated tests passing, build a release of the `clyean` CLI from the branch for all supported operating systems (Linux, MacOS, Windows) and CPU architectures (x86 / x64, ARM)
   - Author and maintain a Github workflow to cut an appropriately named release branch from trunk and tag its head appropriately.  Releases should comply with standard semantic versioning (`https://semver.org/`), and tags should reflect the semver version of the software. Major version updates should only be achievable via manual tagging by me, but the "cut release" Github workflow should apply a tag in which the minor version is incremented on the head of the branch it creates.  The "cut release" Github workflow should be designed to be manually invoked by me.
   - Author and maintain a Github workflow that automatically tags each new commit to release branches with an incremented semver patch version.
-- As we work together, continuously update `SPECS.md` to reflect the latest specified requirements.  Review and refactor the file as useful upon each edit to ensure requirements coherency and consistency. 
+- As we work together, continuously update `GENERAL_SPECS.md` to reflect the latest specified requirements.  Review and refactor the file as useful upon each edit to ensure requirements coherency and consistency. 
 - Author unit and integration tests that thoroughly test `clyean` and its abstractions.
 - Author and maintain thorough documentation of `clyean` within a `docs` directory found at the top level of the project.  Documentation should be written in markdown (in "*.md" files) and adhere to Diátaxis principles (see `https://diataxis.fr/`).
 - Do NOT immediately begin work or mutate the state of this project upon ingesting this file!  Instead, wait for further instruction from me.
