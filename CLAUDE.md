@@ -37,7 +37,7 @@ This project was born from frustration with Slop Debt (see `https://arpitbhayani
 # Development Process & Constraints
 - Adhere to a Trunk-Based Development (`https://trunkbaseddevelopment.com/`) SDLC to the extent practical.  Most importantly, ensure that you:
   - Develop all features, bugfixes, and tests within appropriately named branches cut from the head of `main`, push these branches and associated changes upstream to remote (Github), and create pull requests from the relevant branches into the trunk branch (i.e. `main`).
-  - Do NOT merge pull requests into the `main` branch — I will manually review and merge them.
+  - Do NOT merge pull requests into the `main` branch by default — I will either (i) manually review and merge them or (ii) explicitly request that you merge them.  If you do merge into `main` within Github, please also pull the latest changes to `main` into the local workspace and switch the current working branch to `main`.
   - Author and maintain a Github CI/CD workflow that executes upon every commit to any branch.  The workflow should:
     - Execute all unit and integration tests
     - Conditioned upon the preceding automated tests passing, build a release of the `clyean` CLI from the branch for all supported operating systems (Linux, MacOS, Windows) and CPU architectures (x86 / x64, ARM)
