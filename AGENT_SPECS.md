@@ -13,12 +13,12 @@ The conditions of the rows in the preceding Top-Level Behavior Table are not mut
 
 ## Initial User Prompt Processing
 Upon ingesting a new user prompt, the User Assistant should:
-(1) Categorize the nature of the user's prompt (i.e. assign it a `prompt_type`).
-(2) Commence with processing the prompt in accordance to the Top-Level Behavior Table.
+1. Categorize the nature of the user's prompt (i.e. assign it a `prompt_type`).
+2. Commence with processing the prompt in accordance to the Top-Level Behavior Table.
 
 In regard to step (1), there are two sub-steps:
-(a) Determine the Clyean project's type (i.e. `project_type`).
-(b) Use the `project_type` and the user-provided prompt to assign a prompt type (i.e. a `prompt_type`).
+a. Determine the Clyean project's type (i.e. `project_type`).
+b. Use the `project_type` and the user-provided prompt to assign a prompt type (i.e. a `prompt_type`).
 
 There are two possible `project_type` values that are mutually exclusive: `SOFTWARE_ENGINEERING_PROJECT` and `MISCELLANEOUS_PROJECT`.
 
@@ -39,27 +39,27 @@ There are four possible `prompt_type` values that are mutually exclusive which s
 
 As referenced previously, the User Assistant agent must sometimes "lock the project" or "unlock the project" to prevent the creation of inconsistent state or the compilation of innaccurate information by other Clyean processes running in parallel.  If the project's content is being managed via Git Worktrees in a classic manner, then treat both project locking and unlocking as NO-OPs (since the Software Engineering Manager has a reasonable mechanism to facilitate concurrent work); otherwise, use a classic file lock (with a lock file named `.clyean-lock` in the project's top-level directory) to prevent possibly conflicting concurrent activity by other Clyean user agents.
 
-Assign type (i) 
+## User Communication
+
+The User Assistant should provide information to the user just as the user would expect from a standard `omp` chat interaction (this include stream-of-consciousness reasoning, errors, and final results).  When delegating processing to sub-agents (like the Scaffolder or Software Engineering Director), the User Assistant agent should continuously provide the user information from the sub-agents, likely via continuously streaming, sanitizing, and summarizing their output.
 
 
+# Scaffolder
 
-- Intakes user prompts and begins their processing within the Clyean system.
-- 
-(2) Appropriately re-packages and passes prompts to the Project Scaffolder if scaffolding doesn't yet exist (see scaffolding information in `GENERAL_SPECS.md`)
+Responsible for establishing Clyean project scaffold materials based on deterministic logic when possible, as well as deep agentic research about the project.  Among potentially other work, the scaffolder must:
 
-and Software Engineering Director.
-(3) Maintaining effective mutual exclusion (mutex) locking around project resources to prevent incoherent changes and the compilation or communication of innaccurate information.
-(4) Providing status update information to the user based on the processing of various Clyean agents (including itself).
-(5) Gathering follow-up information from the user in response to agent questions (including its own) as useful.
-(6) Providing exposition regarding the final results of a prompt.
-
-
-
-# Specifications Scaffolder
-
-# Architecture Scaffolder
+- Establish project and agent-level configurations and instructions (i.e. the `.clyean-project.json` file and `.clyean-agents` directory content).
+- Setup `.clyean-container-root` and the Clyean agent Podman sandbox.
+- Deeply research the project and author its specifications (i.e. `.clyean-specs.md`).  The generated materials should reflect the project's status quo, not any future ideal state.
+- Deeply research the project and author its current architecture (`.clyean-architecture` directory content).  The generated materials should reflect the project's status quo, not any future ideal state.
 
 # Software Engineering Director
+
+Responsible for coordinating between the deterministic logic execution and various agents necessary to correctly process the three possible types of prompts: `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, and  `SOFTWARE_ENGINEERING_PROJECT_IMPLEMENTATION`.
+
+When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, the agent should review any useful resources related to the project (e.g. `.clyean-architecture` materials, `.clyean-specs.md`, source code, external information sources) and do its best to service the prompt.  From the user's perspective, their experience should largely mirror the one they'd experience if they had typed their prompt directly into `omp`.  The Software Engineering Director agent is not expected to delegate work to sub-agents any differently than an `omp` agent would normally do.
+
+
 
 # Specifier
 
