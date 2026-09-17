@@ -59,6 +59,16 @@ Responsible for coordinating between the deterministic logic execution and vario
 
 When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, the agent should review any useful resources related to the project (e.g. `.clyean-architecture` materials, `.clyean-specs.md`, source code, external information sources) and do its best to service the prompt.  From the user's perspective, their experience should largely mirror the one they'd experience if they had typed their prompt directly into `omp`.  The Software Engineering Director agent is not expected to delegate work to sub-agents any differently than an `omp` agent would normally do.
 
+When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, the Software Engineering Director should create an implementation plan in `.clyean-plans` that adheres to a reasonable naming convention aligned with plan names as composed by `omp` or Claude Code.  The plan it creates should always have 4 high-level sections (each of which may contain as many sub-sections as useful) that are built as follows:
+
+| Section | Content | Clyean Sub-Agent Author |
+| ------- | ------- | ----------------------- |
+| Overview | Summary of the change that is 1,200 characters in maximum length | Software Engineering Director |
+| Specification Changes | Detailed description of the exact changes to behavior that will be externally legible to human users, agent users, API consumers, and other stakeholders of the software. Much of the content will fit under the description of "system interface" changes, and the content of this section should accurately and comprehensively describe the changes that will be made to `.clyean-specs.md` | Specifier |
+
+
+
+
 
 
 # Specifier
@@ -77,12 +87,24 @@ When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, the agent shoul
 
 # QA Tester
 
+Placeholder – do not implement yet!
+
 # CI/CD Programmer
+
+Placeholder – do not implement yet!
 
 # Deployment Analyst
 
+Placeholder – do not implement yet!
+
 # Security Engineer
+
+Placeholder – do not implement yet!
 
 # White-Hat Hacker
 
+Placeholder – do not implement yet!
+
 # Documentation Author
+
+Placeholder – do not implement yet!

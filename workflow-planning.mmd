@@ -1,0 +1,61 @@
+---
+config:
+  layout: dagre
+---
+flowchart TB
+%% Nodes
+    sed0("Software Engineering Director: Receive instructions to generate a change plan")
+    sed1{"Software Engineering Director: Determine if more information is needed to author the overview section of the change plan"}
+    sed2["Software Engineering Director: Ask User Assistant for clarifications"]
+    sed3["Software Engineering Director: Author overview section of change plan"]
+    sed4["Software Engineering Director: Instruct Specifier to enrich plan with detailed specification changes"]
+    sed5{"Software Engineering Director: Review specification changes and determine if they're aligned with the change plan overview and User Assistant request"}
+    sed6["Software Engineering Director: Inform Specifier of misalignment details and instruct Specifier to revise specification changes to align with instructions"]
+    sed7["Software Engineering Director: Instruct Software Architect to enrich plan with detailed architecture changes"]
+    sed8{"Software Engineering Director: Review architecture changes and determine if they're aligned with the change plan overview, User Assistant request, and specification changes"}
+    sed9["Software Engineering Director: Inform Software Architect of misalignment details and instruct Software Architect to revise architecture changes to align with instructions"]
+
+    ua0["User Assistant: Ask user for clarifications"]
+    ua1["User Assistant: Provider user-supplied clarifications to Software Engineering Director"]
+
+    u["User: Provide clarification to User Assistant"]
+
+    s0["Specifier: Determine if clarifications are needed to author the change plan's detailed specification changes"]
+    s1["Specifier: Ask Software Engineering Director for clarifications"]
+    s2["Specifier: Enrich change plan with detailed specification changes aligned with plan overview and information provided by Software Engineering Director"]
+    s3["Specifier: Notify Software Engineering Director that the specification changes are ready for review"]   
+
+    sa0{"Software Architect: Determine if clarifications are needed to author the change plan's detailed architecture changes"}
+    sa1["Software Architect: Ask Software Engineering Director for clarifications"]
+    sa2["Software Architect: Enrich change plan with detailed architecture changes aligned with plan overview, specification changes, and information provided by Software Engineering Director"]
+    sa3["Software Architect: Notify Software Engineering Director that the architecture changes are ready for review"]
+
+%% Edges
+    
+    %% Overview Section Authoring
+    sed0 --> sed1
+    sed1 -- "More information needed" --> sed2
+    sed1 -- "No more information needed" --> sed3
+    sed2 --> ua0
+    ua0 --> u
+    u --> ua1  
+    ua1 --> sed1
+    sed3 --> sed4
+
+    %% Specification Changes Authoring
+    sed4 --> s0
+    s0 -- "More information needed" --> s1
+    s1 --> sed2
+    s0 -- "No information needed" --> s2
+    s2 --> s3
+    s3 --> sed5
+    sed5 -- "Specification changes are not aligned with plan overview and User Assistant request" --> sed6
+    sed6 --> s0
+    sed5 -- "Specification changes are aligned with plan overview and User Assistant request" --> sed7
+
+    %% Software Architecture Changes Authoring
+    sed7 --> sa0
+    sa0 -- "More information needed" --> sa1
+    sa1 --> sed2
+    sa0 -- "No information needed" --> sa2
+    sa2 --> sa3
