@@ -57,19 +57,29 @@ Responsible for establishing Clyean project scaffold materials based on determin
 
 Responsible for coordinating between the deterministic logic execution and various agents necessary to correctly process the three possible types of prompts: `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, and  `SOFTWARE_ENGINEERING_PROJECT_IMPLEMENTATION`.
 
+## Research Prompt Handling
+
 When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_RESEARCH`, the agent should review any useful resources related to the project (e.g. `.clyean-architecture` materials, `.clyean-specs.md`, source code, external information sources) and do its best to service the prompt.  From the user's perspective, their experience should largely mirror the one they'd experience if they had typed their prompt directly into `omp`.  The Software Engineering Director agent is not expected to delegate work to sub-agents any differently than an `omp` agent would normally do.
 
-When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, the Software Engineering Director should create an implementation plan in `.clyean-plans` that adheres to a reasonable naming convention aligned with plan names as composed by `omp` or Claude Code.  The plan it creates should always have 4 high-level sections (each of which may contain as many sub-sections as useful) that are built as follows:
+## Planning Prompt Handling
+
+When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, the Software Engineering Director should create an implementation plan in `.clyean-plans` that adheres to a reasonable naming convention aligned with plan names as composed by `omp` or Claude Code.  The plan it creates should always have 3 high-level sections (each of which may contain as many sub-sections as useful) that are built as follows:
 
 | Section | Content | Clyean Sub-Agent Author |
 | ------- | ------- | ----------------------- |
 | Overview | Summary of the change that is 1,200 characters in maximum length | Software Engineering Director |
-| Specification Changes | Detailed description of the exact changes to behavior that will be externally legible to human users, agent users, API consumers, and other stakeholders of the software. Much of the content will fit under the description of "system interface" changes, and the content of this section should accurately and comprehensively describe the changes that will be made to `.clyean-specs.md` | Specifier |
+| Specification Changes | Detailed description of the exact changes (if any) to behavior that will be externally legible to human users, agent users, API consumers, and other stakeholders of the software. Much of the content will fit under the description of "system interface" changes, and the content of this section should accurately and comprehensively describe the changes that will be made to `.clyean-specs.md` | Specifier |
+| Implementation Architecture | Detailed description of the exact changes (if any) to the software system's architecture and the manner in which the requested changes will be incorporated into the architecture. The content of this section should accurately and comprehensively describe the changes that will be made to content within the `.clyean-architecture` directory | Software Architect |
 
+To generate a change plan, Clyean's sub-agents should adhere to the workflow described in `workflow-planning.mmd`.
 
+## Implementation Prompt Handling
 
+When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_IMPLEMENTATION`, the Software Engineering Director should:
+1. Create a change plan in accordance to the preceding "Planning Prompt Handling" section if it doesn't already exist.
+2. Implement the relevant change plan in concert with other Clyean sub-agents in adherence to the workflow described in `workflow-implementation.mmd`.
 
-
+For avoidance of doubt, the `sed4["Software Engineering Director: Re-run the planning workflow that generated the change plan with the additional concern of resolving the blocking issue"]` node in `workflow-implementation.mmd` represents re-execution of the preceding sub-section ("Planning Prompt Handling") with the intent of producing a new version of the change plan.
 
 # Specifier
 
@@ -79,11 +89,19 @@ When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, the Software En
 
 # Code Reviewer
 
+Placeholder – do not implement yet!
+
 # Automated Test Programmer
+
+Placeholder – do not implement yet!
 
 # Mutant Killer
 
+Placeholder – do not implement yet!
+
 # CRAP Reducer
+
+Placeholder – do not implement yet!
 
 # QA Tester
 

@@ -1,0 +1,60 @@
+---
+config:
+  layout: dagre
+---
+flowchart TB
+%% Nodes
+    sed0("Software Engineering Director: Receive instructions to implement software changes in accordance to a specified pre-existing change plan")
+    sed1["Software Engineering Director: Instruct Specifier to create or update `.clyean-specs.md` to reflect the change plan"]
+    sed2["Software Engineering Director: Instruct Software Architect to create or update content within the `.clyean-architecture` directory to reflect the change plan and the latest `.clyean-specs.md`"]
+    sed3["Software Engineering Director: Instruct Programmer to implement the change plan in accordance to `.clyean-specs.md` and materials in the `.clyean-architecture` directory"]
+    sed4["Software Engineering Director: Re-run the planning workflow that generated the change plan with the additional concern of resolving the blocking issue"]
+    sed5["Software Engineering Director: Instruct Software Architect to review the implemented changes to verify they (i) correctly implement the change plan, (ii) fulfill the entirety of `.clyean-specs.md`, (iii) adhere to the materials in `.clyean-architecture`, and (iv) meet high code quality standards"]
+    sed6["Software Engineering Director: Inform User Assistant that change implementation is complete"]
+    sed7["Software Engineering Director: Instruct Programmer to remediate the issues identified by the implementation change review"]
+
+    ua0("User Assistant: Notify the user that change implementation is complete")
+
+    s0["Specifier: Create or update `.clyean-specs.md` to reflect change plan"]
+    s1["Specifier: Notify Software Engineering Director that `.clyean-specs.md` editing is complete"]
+
+    sa0["Software Architect: Create or update materials in `.clyean-architecture` to reflect change plan and `.clyean-specs.md`"]
+    sa1["Software Architect: Notify Software Engineering Director that changes to materials in `.clyean-architecture` are complete"]
+    sa2{"Software Architect: Review code and determine if software changes (i) correctly implement the change plan, (ii) fulfill the entirety of `.clyean-specs.md`, (iii) adhere to materials in `.clyean-architecture`, and (iv) meet high code quality standards"}
+    sa3["Software Architect: Inform Software Engineering Director of issues with the implemented changes"]
+    sa4["Software Architect: Notify Software Engineering Director that the implemented changes are approved"]
+
+    p0{"Programmer: Attempt to create or modify the software to correctly implement the change plan in adherence to (i) `.clyean-specs.md`, (ii) materials within `.clyean-architecture`, and (iii) [if relevant] implementation review feedback"}
+    p1["Programmer: Describe blocking issue for change implementation to Software Engineering Director"]
+    p2["Programmer: Notify Software Engineering Director that the software changes are ready for review"]   
+
+
+%% Edges
+    
+    %% Specifications Authoring
+    sed0 --> sed1
+    sed1 --> s0
+    s0 --> s1
+
+    %% Architecture Authoring 
+    s1 --> sed2
+    sed2 --> sa0
+    sa0 --> sa1
+
+    %% Programming
+    sa1 --> sed3
+    sed3 --> p0
+    p0 -- "Discover blocking issue that Programmer can't self-resolve or shouldn't self-resolve" --> p1
+    p1 --> sed4
+    sed4 -- "Provide the new change plan version" --> sed0
+    p0 -- "Complete the development" --> p2
+
+    %% Code Review and Remediation
+    p2 --> sed5
+    sed5 --> sa2
+    sa2 -- "Implementation changes are insufficient" --> sa3
+    sa3 --> sed7
+    sed7 --> p0
+    sa2 -- "Implementation changes are sufficient" --> sa4
+    sa4 --> sed6
+    sed6 --> ua0
