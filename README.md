@@ -1,6 +1,38 @@
 # Clyean
 
-Zero-slop agentic coding harness
+Zero-slop agentic coding harness.
+
+Clyean is an orchestration layer for software development by AI agents.  It contains a fork of the [Oh-My-Pi](https://omp.sh/) harness and coordinates several instances of it, one per specialized agent (a User Assistant you talk to, a Scaffolder, a Software Engineering Director, a Specifier, a Software Architect, and a Programmer), so that every change to a project starts from its written specification and architecture and ends in reviewed, committed code.  Every agent runs in a Podman container whose root filesystem belongs to the project, and every step of every workflow is journaled and committed, so work survives interruption and history says which agent did what.
+
+## Install
+
+Clyean needs Git and Podman on the host; the installers add them when they are missing.
+
+```sh
+# Linux and macOS
+curl -fsSL https://raw.githubusercontent.com/skiller3/clyean/main/install.sh | sh
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/skiller3/clyean/main/install.ps1 | iex
+```
+
+The scripts accept `--ref <tag>` (`-Ref <tag>`) for a specific release, `--source` (`-Source`) to build with cargo, and `--no-deps` (`-NoDeps`) to skip dependency installation.  This version populates the sandbox on Linux hosts only; see [Limitations](docs/explanation/limitations.md).
+
+## Quick start
+
+```sh
+cd ~/workspace/my-project     # any directory, with or without a Git repository
+export ANTHROPIC_API_KEY=...  # or log in with /login once inside
+clyean                        # scaffolds the project and attaches you to the User Assistant
+```
+
+Then type what you want, for example `Plan adding a --json flag to the count command`.  The User Assistant scaffolds the project if needed, hands engineering prompts to the Software Engineering Director, relays questions back to you, and reports the change plan under `.clyean/plans`.  Ask it to implement the plan when you have read it.
+
+## Documentation
+
+The [documentation map](docs/README.md) is organized as tutorials, how-to guides, reference, and explanation.  Good entry points: [Getting started](docs/tutorials/getting-started.md), [Architecture](docs/explanation/architecture.md), and the [command line reference](docs/reference/cli.md).  `GENERAL_SPECS.md` and `AGENT_SPECS.md` are the specifications Clyean is built to.
 
 ## License
 
