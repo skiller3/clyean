@@ -1,0 +1,6 @@
+# Test discovery for the Clyean repository root covers only the harness
+# extensions. The vendored harness under vendor/omp carries its own bunfig
+# and is tested from that directory.
+[test]
+root = "extensions"
+pathIgnorePatterns = ["**/node_modules/**", "**/.git/**", "vendor/**"]

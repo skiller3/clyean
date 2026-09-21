@@ -1,0 +1,11 @@
+{
+  "name": "@clyean/harness-extensions",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Clyean-managed extensions for the contained harness: the Herdr state reporter and the orchestration bridge.",
+  "license": "AGPL-3.0-only WITH LicenseRef-clyean-output-exception",
+  "scripts": {
+    "test": "bun test ."
+  }
+}
