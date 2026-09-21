@@ -24,6 +24,19 @@ const SERVER_ERROR_BACKOFF_MS = 20 * 1000; // 20s
 const ACCOUNT_RATE_LIMIT_PATTERN =
 	/\baccount(?:'s)?\b[^\n]{0,80}\brate.?limit\b|\brate.?limit\b[^\n]{0,80}\baccount\b/i;
 const INSUFFICIENT_BALANCE_PATTERN = /insufficient.?balance/i;
+// Prepaid-credit exhaustion phrased around the credit balance rather than a
+// quota: Anthropic "This request would exceed your available credits given
+// your current in-flight requests" (402), OpenRouter "Insufficient credits",
+// "credits exhausted". Account-local, so rotate to a sibling credential.
+const CREDITS_EXHAUSTED_PATTERN =
+	/\b(?:exceed\w*|insufficient|not enough)\b[^\n]{0,40}\bcredits?\b|\bcredits?\b[^\n]{0,40}\b(?:exhausted|depleted)\b/i;
+// Anthropic subscription entitlement wall: "Usage credits are required for this
+// model" with `error_code: credits_required`. The account cannot serve the model
+// at all, so rotate to a sibling rather than backing off on this one. Bounded to
+// the documented sentence and the exact code: bare "usage credits" also appears
+// in unrelated diagnostics ("Failed to fetch usage credits from billing
+// service"), which must not rotate a healthy credential.
+const ANTHROPIC_CREDITS_REQUIRED_PATTERN = /\busage credits are required\b|\bcredits_required\b/i;
 const SPEND_LIMIT_PATTERN = /spend.?limit/i;
 const SUBSCRIPTION_CAP_PATTERN =
 	/\b(?:subscription|plan|membership)\b[^\n]{0,80}\b(?:rate.?limits?|quota|cap)\b|\b(?:rate.?limits?|quota|cap)\b[^\n]{0,80}\b(?:subscription|plan|membership)\b/i;
@@ -228,6 +241,10 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 		return "QUOTA_EXHAUSTED";
 	}
 
+	if (ANTHROPIC_CREDITS_REQUIRED_PATTERN.test(errorMessage)) {
+		return "QUOTA_EXHAUSTED";
+	}
+
 	if (
 		lower.includes("per minute") ||
 		lower.includes("rate limit") ||
@@ -247,7 +264,9 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 		lower.includes("out of credits") ||
 		lower.includes("spending-limit") ||
 		lower.includes("spending limit") ||
-		INSUFFICIENT_BALANCE_PATTERN.test(errorMessage)
+		lower.includes("access_terminated_error") ||
+		INSUFFICIENT_BALANCE_PATTERN.test(errorMessage) ||
+		CREDITS_EXHAUSTED_PATTERN.test(errorMessage)
 	) {
 		return "QUOTA_EXHAUSTED";
 	}
@@ -287,7 +306,7 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
 const USAGE_LIMIT_PATTERN =
-	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|balance.?exhausted|run out of credits|out of credits|spending[- _]?limit|personal-team-blocked|clinepass limit|free limit reached on model/i;
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|balance.?exhausted|run out of credits|out of credits|out of (?:extra )?usage|spending[- _]?limit|personal-team-blocked|clinepass limit|free limit reached on model|access_terminated_error/i;
 
 /**
  * HTTP status codes that, absent richer body classification, represent an
@@ -390,6 +409,8 @@ export function matchesUsageLimitText(errorMessage: string): boolean {
 	if (isDashScopeTokenLimitText(errorMessage)) return false;
 	return (
 		USAGE_LIMIT_PATTERN.test(errorMessage) ||
+		ANTHROPIC_CREDITS_REQUIRED_PATTERN.test(errorMessage) ||
+		CREDITS_EXHAUSTED_PATTERN.test(errorMessage) ||
 		(CN_QUOTA_EXHAUSTED_PATTERN.test(errorMessage) && !CN_TRANSIENT_CAP_PATTERN.test(errorMessage)) ||
 		SPEND_LIMIT_PATTERN.test(errorMessage) ||
 		ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage) ||

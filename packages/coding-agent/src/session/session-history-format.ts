@@ -19,7 +19,7 @@ import type {
 	HookMessage,
 	PythonExecutionMessage,
 } from "./messages";
-import { truncateMiddle } from "./streaming-output";
+import { truncateMiddle } from "@oh-my-pi/pi-tui/tools/streaming-output";
 
 export interface HistoryFormatOptions {
 	/** Optional H1 prepended to the transcript. */
@@ -402,6 +402,8 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
 			return `[irc] ${str("from") || "?"} → me: ${oneLine(str("message"))}`;
 		case "irc:relay":
 			return `[irc] ${str("from") || "?"} → ${str("to") || "?"}: ${oneLine(str("body"))}`;
+		case "irc:workpool":
+			return `[pool] ${str("pool")} → ${str("to") || "?"}: ${oneLine(str("body"))}`;
 		case "async-result": {
 			const jobs = Array.isArray(details.jobs) && details.jobs.length > 0 ? details.jobs : [details];
 			const labels = jobs
