@@ -1,6 +1,6 @@
 # Basic User Experience
 From a UX perspective, `clyean` is primarily a CLI program that launches a terminal UI (TUI) in which the user performs agentic programming (a.k.a vibe coding) and other LLM-based tasks (e.g. research, modeling, authoring).  The CLI/TUI should behave identically to Oh-My-Pi (`https://omp.sh/`; `https://github.com/can1357/oh-my-pi`) with the following modifications:
-  - Titles, headers, and text should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".  However, the TUI welcome page should prominently display the text "Clyean uses the fabulous Oh-My-Pi (https://omp.sh/) and Pi (https://pi.dev/) projects!"
+  - Titles, headers, and text should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".  However, the TUI welcome page should prominently display the text "Clyean uses the fabulous Oh-My-Pi (https://omp.sh/) harness!"
   - CLI help text and messages should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".
   - The "Pi" symbol logo should be replaced with a "Clyean" logo (and iconography) you invent.  The project's logo should be reminiscent of a bar of soap.
   - `omp` commandline arguments/options that are non-coherent given Clyean's goals or complicated to implement due to its architecture should be eliminated.
@@ -10,6 +10,7 @@ From a UX perspective, `clyean` is primarily a CLI program that launches a termi
 
 IMPORTANT: When the user passes prompts to the Clyean CLI/TUI, they should be directly interacting with the "User Assistant" agent, which is itself one of several agents specified in this file's "Agents" section.
 
+
 # Installation
 Users are expected to install the latest release (or any specific release via a passed release version argument) via one of two scripts:
 - `install.sh` - Bourne script expected to be used for installation within Linux and MacOS environments, often via a command like `curl -fsSL https://clyean.com/install.sh | sh`.
@@ -18,6 +19,7 @@ Users are expected to install the latest release (or any specific release via a 
 The preceding scripts are expected to install any necessary required dependencies (e.g. Podman), and broadly comply with software installation norms for their respective OS environments (for example, the `clyean` executable should be installed by default within `/home/<user>/.local/bin/` within Ubuntu Linux environments).  When in doubt about correct design and behavior of these scripts, please mirror the design and behavior of `omp`'s installation scripts at `https://omp.sh/install` and `https://omp.sh/install.ps1`.
 
 No `clyean.com` website is currently launched; please just author the two install scripts at the top level of the `clyean` repository for now.
+
 
 # Projects & Scaffolding
 Unless otherwise specified via arguments in a fashion that mirrors `omp`'s behavior, the `clyean` executable should assume the current working directory of its process represents a "project" for which it is going to be used to perform work.  If a `.clyean/project.json` file exists within the project directory, Clyean should consider the project to be scaffolded; if the file doesn't exist, then `clyean` should immediately scaffold the project by creating the following resources in the project's top-level directory:
@@ -33,7 +35,8 @@ Unless otherwise specified via arguments in a fashion that mirrors `omp`'s behav
 
 All of the preceding `.clyean` scaffold materials are intended to be modifiable by the user and Clyean itself — and with the exception of the `.clyean/container-root` content — subjected to version control locally and within remote project repositories.  However, Clyean should also support user-provided local-only (i.e. not pushed to remote repository) (i) enhancements of agent baseline instructions, (ii) overrides of agent configurations, and (iii) overrides of Clyean project configuration.  These local-only enhancements and overrides should be implemented by mirorring Claude Code semantics for `*.local.<ext>` files.  
 
-## Architecture Diagram Rendering
+
+## Architecture Diagraming & Rendering
 
 Clyean renders the `.clyean/architecture` diagrams with PlantUML (`https://plantuml.com/`), which supports all 14 official UML diagram types with first-class notation.
 
@@ -43,6 +46,7 @@ Clyean renders the `.clyean/architecture` diagrams with PlantUML (`https://plant
 - Render locally and only locally.  Clyean must never submit diagram sources to the public PlantUML server or to any other third-party rendering service, because those sources describe the user's private architecture.
 - The agent sandbox image must provide a Java runtime and the pinned PlantUML jar.  Scaffolding must fail with an actionable message if either is missing rather than silently producing a project whose diagrams cannot be rendered.
 - Treat a non-zero PlantUML exit status as a failed render and discard its output.  PlantUML can emit an image carrying a sponsored message in place of a diagram when a render fails, and such an image must never be written into `.clyean/architecture`.
+
 
 # Sandboxing, Workspaces & Mounts
 Clyean must sandbox all agent activity via Podman (https://podman.io/) containers, and users are expected to be aware that Podman-based sandboxing is occurring (do not try to abstract them aware from this fact).  To be architecturally specific, any Clyean agent should always run as the sole direct child process of an `init` root process (PID 1) within a Podman container.
@@ -59,6 +63,7 @@ Clyean's sandboxing behavior should be enforced as follows:
 - With the exception of the "Product Director" agent being capable of pushing changes to remote repositories and issuing pull requests, all agents should be instructed by default to never modify the state of any connected system (via MCP, API, UI, or otherwise) unless directly and explicitly instructed to do so. 
 - As a further exception, the "User Assistant" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
 
+
 # Oh-My-Pi (omp) Architectural Relationship & Usage
 
 Clyean *contains* a fork of `omp` and sits above it: Clyean's own code is an orchestration layer that coordinates communication between multiple agents, each of which runs independently on the contained harness.  The rebranding, option-pruning, and per-agent scoping requirements in the "Basic User Experience" section describe changes to the contained harness; the user is expected to interact with a "User Assistant" agent via `podman exec -it`.
@@ -73,19 +78,23 @@ The contained harness deliberately keeps `omp`'s configuration discovery model r
 
 These paths and variables are an explicit exception to the rebranding requirements in the "Basic User Experience" section.  Rebranding applies to what the user reads (TUI text, logos, CLI help and messages), not necessarily to where configuration lives on disk or how it is named in the environment.  Where the harness needs configuration that has no upstream equivalent, it is added within the existing `~/.omp` and `.omp/` roots rather than in a new location.
 
+
 # Agents
 
-Clyean is a system of several specialized agents that coordinate to perform work, and the specification of those agents lives in a companion file, `AGENT_SPECS.md`.  Ingest `AGENT_SPECS.md` in full alongside this file before doing any work; it carries the same authority as this file, and every agent named here (the User Assistant and the Product Director, for example) is defined there.
+Clyean is a system of several specialized agents that coordinate to perform work, and the specification of those agents lives in a companion file, `AGENT_SPECS.md`.  Ingest `AGENT_SPECS.md` in full alongside this file before doing any work; it carries the same authority as this file, and every agent named here (the User Assistant and the Software Engineering Director, for example) is defined there.
 
-Keep the division between the two files intact as they evolve.  Requirements that describe Clyean as a whole, or that hold regardless of which agent is acting, belong in this file.  The roster of agents and each agent's responsibilities, baseline instructions, tool and MCP scoping, model configuration, and interactions with the other agents belong in `AGENT_SPECS.md`.
+Keep the division between the two files intact as they evolve.  Requirements that describe Clyean as a whole, or that hold regardless of which agent is acting, belong in this file.  The roster of agents and each agent's responsibilities, baseline instructions, and interactions with the other agents belong in `AGENT_SPECS.md`.
 
-**IMPORTANT**: From a user perspective, Clyean should have the notion of a session that is analogous to an `omp` or Claude Code session, and the semantics for a "session" and its ID should be nearly the same (e.g. user should be able to resume a previous existing session; all interaction with a `clyean` User Assistant agent via the TUI should occur within the same session unless explicit action is taken by the user).  From an implementation perspective, a Clyean session should simply be the `omp` session of a specific User Assistant agent conversation.  All other Clyean agents besides the User Assistant should be invoked with new sessions for each new user-provided prompt being processed, but these sessions should be re-used within the processing of the given prompt (for avoidance of doubt, usage of these sub-agent sessions should survive the gathering of follow-up information from the user in order to fulfill an initial user-supplied prompt).
+**IMPORTANT**: From a user perspective, Clyean should have the notion of a session that is analogous to an `omp` or Claude Code session, and the semantics for a "session" and its ID should be nearly the same (e.g. user should be able to resume a previous existing session; all interaction with a `clyean` User Assistant agent via the TUI should occur within the same session unless explicit action is taken by the user).  From an implementation perspective, a Clyean session should simply be the `omp` session of a specific User Assistant agent conversation.  All other Clyean agents besides the User Assistant should be invoked with new sessions for each new user-provided prompt being processed.  All `omp` sessions should be re-used within the processing of a given Clyean prompt (for avoidance of doubt, usage of these sub-agent sessions should survive the gathering of follow-up information from the user in order to fulfill an initial user-supplied prompt).
 
 The resetting of sub-agent context windows for each new user-supplied prompt is critical to Clyean's goal of preventing the accumulation of technical debt within a project.
 
+
 # Git Usage & Durable Execution
+
 Within a Clyean session, all activities should be subject to durable execution as commonly defined (see `https://restate.dev/what-is-durable-execution`) to the extent practical; among the typical benefits of workflow systems with durable execution, a Clyean user should expect a resumed session to finish the work that was already started within it.  The preferred method to keep track of the state of work is Git.  Other than respecting `.gitignore` and other explicit Git-related instructions from the user, Clyean's deterministic logic and sub-agents should stage and commit their changes to project state (including changes to change plans themselves).  Consequently, the responsible agents should stage and commit materials after many of the steps in both the `workflow-planning.mmd` and `workflow-implementation.mmd` files.
 
+Unless explicitly instructed otherwise, Clyean sub-agents should always identify themselves as the author of specific changes in their Git commit messages; the mechanism and format of all such identification should be standardized across all Clyean agents.
 
 
 # Herdr Compatibility
@@ -178,5 +187,3 @@ Clyean's software logic (other than the built-in Podman functionality, built-in 
 - SOLID (https://en.wikipedia.org/wiki/SOLID)
 - Don't Repeat Yourself (DRY)
 - Rust developer community norms and idioms
-
-
