@@ -67,6 +67,31 @@ impl ProjectLock {
         Ok(Self::Held(HeldLock { _lock: lock }))
     }
 
+    /// Like [`ProjectLock::acquire`], but tolerates the brief window in which a child
+    /// process forked by this process still holds an inherited copy of a lock that was
+    /// just released: a genuinely held lock persists far longer than `attempts * delay`.
+    pub fn acquire_with_retry(
+        layout: &ProjectLayout,
+        use_worktrees: bool,
+        attempts: u32,
+        delay: std::time::Duration,
+    ) -> Result<Self, ProjectLockError> {
+        let mut remaining = attempts.max(1);
+        loop {
+            match Self::acquire(layout, use_worktrees) {
+                Err(ProjectLockError::Locked(path)) if remaining > 1 => {
+                    remaining -= 1;
+                    std::thread::sleep(delay);
+                    if remaining == 1 {
+                        return Self::acquire(layout, use_worktrees)
+                            .map_err(|_| ProjectLockError::Locked(path));
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+
     pub fn is_no_op(&self) -> bool {
         matches!(self, Self::NoOp)
     }
@@ -97,5 +122,17 @@ mod tests {
         ));
         drop(first);
         assert!(ProjectLock::acquire(&layout, false).is_ok());
+    }
+
+    #[test]
+    fn retrying_acquisition_gives_up_after_the_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = ProjectLayout::new(dir.path());
+        let _held = ProjectLock::acquire(&layout, false).unwrap();
+        let started = std::time::Instant::now();
+        let result =
+            ProjectLock::acquire_with_retry(&layout, false, 3, std::time::Duration::from_millis(5));
+        assert!(matches!(result, Err(ProjectLockError::Locked(_))));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(10));
     }
 }

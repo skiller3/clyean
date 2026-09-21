@@ -168,11 +168,12 @@ impl OrchestratorService {
             }
         };
         drop(state);
-        let locked = match ProjectLock::acquire(&layout, use_worktrees) {
-            Ok(_) => false,
-            Err(ProjectLockError::Locked(_)) => true,
-            Err(other) => return Err(OrchestratorError::Workflow(other.to_string())),
-        };
+        let locked =
+            match ProjectLock::acquire_with_retry(&layout, use_worktrees, 4, LOCK_RETRY_DELAY) {
+                Ok(_) => false,
+                Err(ProjectLockError::Locked(_)) => true,
+                Err(other) => return Err(OrchestratorError::Workflow(other.to_string())),
+            };
         let running = self.registry.running_ids().await;
         let incomplete: Vec<Value> = list_journals(&layout)?
             .into_iter()
@@ -388,8 +389,7 @@ impl OrchestratorService {
         services: Arc<ProjectServices>,
         mut journal: WorkJournal,
     ) -> Result<StreamAttachment> {
-        let lock = ProjectLock::acquire(&services.layout, services.config.git.use_worktrees)
-            .map_err(|_| OrchestratorError::ProjectLocked)?;
+        let lock = acquire_project_lock(&services.layout, services.config.git.use_worktrees)?;
         let (handle, answers) = WorkHandle::new(WorkId::from_string(journal.work_id.clone()));
         let receiver = handle.subscribe();
         self.registry.insert(handle.clone()).await;
@@ -436,6 +436,19 @@ impl OrchestratorService {
             replay: Vec::new(),
         })
     }
+}
+
+/// How long a lock attempt tolerates the exec window of a child process that inherited
+/// a just-released lock before reporting the project as locked.
+const LOCK_RETRY_ATTEMPTS: u32 = 40;
+const LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn acquire_project_lock(layout: &ProjectLayout, use_worktrees: bool) -> Result<ProjectLock> {
+    ProjectLock::acquire_with_retry(layout, use_worktrees, LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY)
+        .map_err(|error| match error {
+            ProjectLockError::Locked(_) => OrchestratorError::ProjectLocked,
+            other => OrchestratorError::Workflow(other.to_string()),
+        })
 }
 
 fn invalid(id: &str, error: serde_json::Error) -> Dispatch {

@@ -388,7 +388,10 @@ async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
     assert_eq!(status["result"]["project_type"], Value::Null);
 
     let (response, events) = call(&service, json!({"id": "x", "method": "project.scaffold", "params": {"project_type": "SOFTWARE_ENGINEERING_PROJECT"}})).await;
-    assert_eq!(response["result"]["type"], "work_accepted");
+    assert_eq!(
+        response["result"]["type"], "work_accepted",
+        "unexpected response: {response}"
+    );
     let Event::Completed { summary, .. } = events.last().unwrap() else {
         panic!("{events:?}")
     };
