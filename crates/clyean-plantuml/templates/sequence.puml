@@ -1,0 +1,9 @@
+@startuml
+title {{PROJECT_NAME}}: Sequence Diagram
+' Ordered interactions between participants for one scenario.
+participant Caller
+participant Placeholder
+Caller -> Placeholder : request
+Placeholder --> Caller : response
+note over Placeholder : Replace with a principal interaction.
+@enduml

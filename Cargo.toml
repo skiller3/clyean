@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/clyean",
+    "crates/clyean-agents",
+    "crates/clyean-git",
+    "crates/clyean-harness",
+    "crates/clyean-orchestrator",
+    "crates/clyean-plantuml",
+    "crates/clyean-project",
+    "crates/clyean-sandbox",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-only WITH LicenseRef-clyean-output-exception"
+repository = "https://github.com/skiller3/clyean"
+homepage = "https://github.com/skiller3/clyean"
+authors = ["Skye Isard <skye.isard@gmail.com>"]
+
+[workspace.dependencies]
+clyean-agents = { path = "crates/clyean-agents" }
+clyean-git = { path = "crates/clyean-git" }
+clyean-harness = { path = "crates/clyean-harness" }
+clyean-orchestrator = { path = "crates/clyean-orchestrator" }
+clyean-plantuml = { path = "crates/clyean-plantuml" }
+clyean-project = { path = "crates/clyean-project" }
+clyean-sandbox = { path = "crates/clyean-sandbox" }
+
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+fd-lock = "4"
+hex = "0.4"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v7"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

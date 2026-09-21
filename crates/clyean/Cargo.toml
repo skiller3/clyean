@@ -1,0 +1,32 @@
+[package]
+name = "clyean"
+description = "Clyean: a zero-slop agentic coding harness that coordinates sandboxed specialized agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "clyean"
+path = "src/main.rs"
+
+[dependencies]
+clyean-agents = { workspace = true }
+clyean-git = { workspace = true }
+clyean-harness = { workspace = true }
+clyean-orchestrator = { workspace = true }
+clyean-plantuml = { workspace = true }
+clyean-project = { workspace = true }
+clyean-sandbox = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

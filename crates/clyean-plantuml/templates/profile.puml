@@ -1,0 +1,6 @@
+@startuml
+title {{PROJECT_NAME}}: Profile Diagram
+' Stereotypes and tagged values that extend the UML vocabulary for this project.
+class "<<stereotype>> Placeholder" as Placeholder
+note right of Placeholder : Replace with the project's stereotypes, or state that none are defined.
+@enduml

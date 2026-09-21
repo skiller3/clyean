@@ -1,0 +1,26 @@
+[package]
+name = "clyean-sandbox"
+description = "Podman sandbox: root filesystem provisioning, mounts, and agent containers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+clyean-project = { workspace = true }
+clyean-agents = { workspace = true }
+clyean-plantuml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

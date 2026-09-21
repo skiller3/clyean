@@ -1,0 +1,8 @@
+@startuml
+title {{PROJECT_NAME}}: Interaction Overview Diagram
+' Control flow between interaction fragments.
+start
+:ref Placeholder interaction;
+stop
+note right : Replace with the flow between the project's interactions.
+@enduml

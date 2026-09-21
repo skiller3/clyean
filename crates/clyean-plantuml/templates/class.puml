@@ -1,0 +1,8 @@
+@startuml
+title {{PROJECT_NAME}}: Class Diagram
+' Structural view of the principal classes, their attributes, operations, and relationships.
+class Placeholder {
+  +name : String
+}
+note right of Placeholder : Replace with the project's classes.
+@enduml
