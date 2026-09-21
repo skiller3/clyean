@@ -1,0 +1,235 @@
+# Reusable build pipeline shared by ci.yml (every commit on every branch) and
+# release.yml (tagged releases). It runs the unit and integration tests first
+# and, only when they pass, builds the clyean CLI for every supported host
+# platform plus the contained harness for the Linux sandbox architectures.
+# When upload_release_tag is set, the built assets are attached to the GitHub
+# release for that tag together with a SHA256SUMS manifest.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      upload_release_tag:
+        description: Release tag whose GitHub release receives the built assets (empty for no publish)
+        required: false
+        type: string
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  HARNESS_DIR: vendor/omp
+
+jobs:
+  test-rust:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Ensure Podman is available for sandbox integration tests
+        shell: bash
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          podman --version
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unit and integration tests
+        env:
+          CLYEAN_PODMAN_TESTS: "1"
+        run: cargo test --workspace --locked
+
+  test-extensions:
+    name: Harness extension tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Run extension tests
+        run: bun test extensions
+
+  test-harness:
+    name: Contained harness smoke tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vendor/omp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install harness dependencies
+        run: bun install --frozen-lockfile
+      # The harness's native addons are Rust N-API modules that upstream builds
+      # with bazel. Like upstream's own pull request path, fetch the prebuilt
+      # addons for the vendored version from the npm leaf package and stage
+      # them where the workspace loader looks first
+      # (packages/natives/native, see packages/natives/native/loader-state.js).
+      - name: Stage prebuilt native addons (linux-x64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/coding-agent/package.json').version")"
+          tarball="$(npm view "@oh-my-pi/pi-natives-linux-x64@${version}" dist.tarball)"
+          echo "Fetching ${tarball}"
+          mkdir -p "$RUNNER_TEMP/natives-linux-x64"
+          curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/natives-linux-x64"
+          cp "$RUNNER_TEMP/natives-linux-x64/package/"pi_natives.linux-x64-*.node packages/natives/native/
+          ls -la packages/natives/native/*.node
+      - name: Harness starts
+        run: bun packages/coding-agent/src/cli.ts --version
+      - name: Welcome screen tests
+        run: bun test packages/tui/test/welcome.test.ts
+
+  build-cli:
+    name: Build clyean (${{ matrix.asset }})
+    needs: [test-rust, test-extensions, test-harness]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: clyean-linux-x64
+            exe: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: clyean-linux-arm64
+            exe: ""
+          # Intel macOS is cross-compiled on the Apple Silicon runner because
+          # GitHub has retired its Intel macOS runner images.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: clyean-darwin-x64
+            exe: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: clyean-darwin-arm64
+            exe: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: clyean-windows-x64.exe
+            exe: ".exe"
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset: clyean-windows-arm64.exe
+            exe: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p clyean
+      - name: Rename binary to release asset name
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/clyean${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+      # The cross-compiled Intel macOS binary needs Rosetta to run on the
+      # Apple Silicon runner, so it is the one asset that is not smoke-tested.
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: ./dist/${{ matrix.asset }} --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  build-harness:
+    name: Build contained harness (linux-x64, linux-arm64)
+    needs: [test-rust, test-extensions, test-harness]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vendor/omp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install harness dependencies
+        run: bun install --frozen-lockfile
+      # gen:native (packages/natives/scripts/embed-native.ts) embeds the addons
+      # found in packages/natives/native into the standalone binary and checks
+      # that they carry the version sentinel of the vendored natives package, so
+      # the leaf packages must match the vendored harness version exactly.
+      - name: Stage prebuilt native addons for both Linux architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/coding-agent/package.json').version")"
+          for tag in linux-x64 linux-arm64; do
+            tarball="$(npm view "@oh-my-pi/pi-natives-${tag}@${version}" dist.tarball)"
+            echo "Fetching ${tarball}"
+            mkdir -p "$RUNNER_TEMP/natives-${tag}"
+            curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP/natives-${tag}"
+            cp "$RUNNER_TEMP/natives-${tag}/package/"pi_natives.${tag}*.node packages/natives/native/
+          done
+          ls -la packages/natives/native/*.node
+      - name: Build harness binaries
+        env:
+          RELEASE_TARGETS: linux-x64,linux-arm64
+        run: bun run ci:release:build-binaries
+      - name: Rename binaries to release asset names
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp packages/coding-agent/binaries/omp-linux-x64 dist/clyean-harness-linux-x64
+          cp packages/coding-agent/binaries/omp-linux-arm64 dist/clyean-harness-linux-arm64
+          chmod +x dist/clyean-harness-*
+      - name: Smoke test (linux-x64)
+        shell: bash
+        run: |
+          runtime_dir="$(mktemp -d)"
+          HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/xdg" ./dist/clyean-harness-linux-x64 --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clyean-harness
+          path: vendor/omp/dist/clyean-harness-*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release assets
+    if: inputs.upload_release_tag != ''
+    needs: [build-cli, build-harness]
+    # Permissions are inherited from the caller: release.yml grants
+    # contents: write, while ci.yml (where this job is skipped) grants read.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create or update the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.upload_release_tag }}
+          name: ${{ inputs.upload_release_tag }}
+          generate_release_notes: true
+          prerelease: ${{ contains(inputs.upload_release_tag, '-') }}
+          fail_on_unmatched_files: true
+          files: dist/*

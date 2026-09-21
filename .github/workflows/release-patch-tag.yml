@@ -1,0 +1,77 @@
+# Tags every new commit pushed to a release branch with the next patch version
+# of that branch's MAJOR.MINOR line and dispatches release.yml for the tag.
+#
+# A push that already carries a semantic version tag (the initial push made by
+# cut-release.yml, or a tag pushed by hand) is left alone. Runs are queued per
+# branch rather than cancelled so two quick pushes receive consecutive patch
+# numbers.
+name: Tag release patch
+
+on:
+  push:
+    branches: ['release/**']
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-patch-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag next patch version
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Compute the next patch version
+        id: version
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$BRANCH" | grep -Eq '^release/v[0-9]+\.[0-9]+$'; then
+            echo "Branch ${BRANCH} is not a release/v<MAJOR>.<MINOR> branch; nothing to tag."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "HEAD already carries a release tag: $(git tag --points-at HEAD | tr '\n' ' ')"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          line="${BRANCH#release/v}"
+          escaped_line="${line//./\\.}"
+          latest="$(git tag --list "v${line}.*" | grep -E "^v${escaped_line}\.[0-9]+$" | sort -V | tail -n 1 || true)"
+          if [ -z "$latest" ]; then
+            tag="v${line}.0"
+          else
+            patch="${latest##*.}"
+            tag="v${line}.$((patch + 1))"
+          fi
+          echo "Latest tag on ${BRANCH}: ${latest:-none}; tagging HEAD as ${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - name: Tag and push
+        if: steps.version.outputs.tag != ''
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release ${TAG}" HEAD
+          git push origin "refs/tags/${TAG}"
+      - name: Dispatch the release build
+        if: steps.version.outputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run release.yml --ref "$TAG" -f "tag=${TAG}"

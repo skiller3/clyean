@@ -1,0 +1,79 @@
+# Cuts a release branch from the head of main, invoked manually.
+#
+# The workflow finds the highest existing semantic version tag, increments the
+# minor version, creates the branch release/v<MAJOR>.<MINOR> from main, tags the
+# head of that branch with v<MAJOR>.<MINOR>.0, and dispatches release.yml for
+# the new tag. Later commits on the release branch receive patch tags from
+# release-patch-tag.yml.
+#
+# Major version bumps are deliberately manual: create and push a
+# v<MAJOR+1>.0.0 tag by hand (and the matching release/v<MAJOR+1>.0 branch);
+# subsequent runs of this workflow continue from that tag.
+name: Cut release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Cut release branch and tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Cut release must be run from main (got ${{ github.ref }})."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Compute the next minor version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          latest="${latest:-v0.0.0}"
+          IFS=. read -r major minor _patch <<< "${latest#v}"
+          next_minor=$((minor + 1))
+          tag="v${major}.${next_minor}.0"
+          branch="release/v${major}.${next_minor}"
+          echo "Latest tag: ${latest}; next release: ${tag} on ${branch}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Release branch ${branch} already exists."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists."
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+      - name: Create branch and tag, then push
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git branch "$BRANCH" main
+          git tag -a "$TAG" -m "Release ${TAG}" "$BRANCH"
+          git push origin "refs/heads/${BRANCH}" "refs/tags/${TAG}"
+      - name: Dispatch the release build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh workflow run release.yml --ref "$TAG" -f "tag=${TAG}"
