@@ -1,0 +1,6 @@
+@startuml
+title {{PROJECT_NAME}}: Component Diagram
+' Components, the interfaces they provide and require, and their wiring.
+[Placeholder]
+note right of [Placeholder] : Replace with the project's components.
+@enduml

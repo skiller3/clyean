@@ -9,6 +9,7 @@
  * regression that motivated the split.
  */
 import type { CommandEntry } from "@oh-my-pi/pi-utils/cli";
+import { CLI_NAME } from "@oh-my-pi/pi-utils/dirs";
 import * as commandHelp from "./cli/command-help";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
@@ -17,10 +18,21 @@ import {
 	STRING_VALUE_FLAGS,
 	VALUELESS_FLAGS,
 } from "./cli/flag-tables";
-import { launchHelp } from "./commands/launch-help";
+import type * as LaunchHelp from "./commands/launch-help";
+
+function loadLaunchHelp(): typeof LaunchHelp.launchHelp {
+	const module: typeof LaunchHelp = require("./commands/launch-help");
+	return module.launchHelp;
+}
 
 export const commands: CommandEntry[] = [
-	{ name: "launch", load: () => import("./commands/launch").then(m => m.default), help: launchHelp },
+	{
+		name: "launch",
+		load: () => import("./commands/launch").then(m => m.default),
+		get help() {
+			return loadLaunchHelp();
+		},
+	},
 	{
 		name: "acp",
 		load: () => import("./commands/acp").then(m => m.default),
@@ -42,16 +54,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.agentsHelp,
 	},
 	{
-		name: "bench",
-		load: () => import("./commands/bench").then(m => m.default),
-		help: commandHelp.benchHelp,
-	},
-	{
-		name: "browser-relay",
-		load: () => import("./commands/browser-relay").then(m => m.default),
-		help: commandHelp.browserRelayHelp,
-	},
-	{
 		name: "cleanse",
 		load: () => import("./commands/cleanse").then(m => m.default),
 		help: commandHelp.cleanseHelp,
@@ -60,16 +62,6 @@ export const commands: CommandEntry[] = [
 		name: "commit",
 		load: () => import("./commands/commit").then(m => m.default),
 		help: commandHelp.commitHelp,
-	},
-	{
-		name: "completions",
-		load: () => import("./commands/completions").then(m => m.default),
-		help: commandHelp.completionsHelp,
-	},
-	{
-		name: "__complete",
-		load: () => import("./commands/complete").then(m => m.default),
-		help: commandHelp.completeHelp,
 	},
 	{
 		name: "compress",
@@ -82,9 +74,9 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.configHelp,
 	},
 	{
-		name: "dry-balance",
-		load: () => import("./commands/dry-balance").then(m => m.default),
-		help: commandHelp.dryBalanceHelp,
+		name: "find",
+		load: () => import("./commands/find").then(m => m.default),
+		help: commandHelp.findHelp,
 	},
 	{
 		name: "gc",
@@ -97,19 +89,9 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.grepHelp,
 	},
 	{
-		name: "gallery",
-		load: () => import("./commands/gallery").then(m => m.default),
-		help: commandHelp.galleryHelp,
-	},
-	{
 		name: "git",
 		load: () => import("./commands/git").then(m => m.default),
 		help: commandHelp.gitHelp,
-	},
-	{
-		name: "grievances",
-		load: () => import("./commands/grievances").then(m => m.default),
-		help: commandHelp.grievancesHelp,
 	},
 	{
 		name: "images",
@@ -118,19 +100,9 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.imagesHelp,
 	},
 	{
-		name: "if-bench",
-		load: () => import("./commands/if-bench").then(m => m.default),
-		help: commandHelp.ifBenchHelp,
-	},
-	{
 		name: "install",
 		load: () => import("./commands/install").then(m => m.default),
 		help: commandHelp.installHelp,
-	},
-	{
-		name: "join",
-		load: () => import("./commands/join").then(m => m.default),
-		help: commandHelp.joinHelp,
 	},
 	{
 		name: "models",
@@ -140,22 +112,13 @@ export const commands: CommandEntry[] = [
 	{
 		name: "plugin",
 		load: () => import("./commands/plugin").then(m => m.default),
+		aliases: ["plugins"],
 		help: commandHelp.pluginHelp,
 	},
 	{
 		name: "ps",
 		load: () => import("./commands/ps").then(m => m.default),
 		help: commandHelp.psHelp,
-	},
-	{
-		name: "say",
-		load: () => import("./commands/say").then(m => m.default),
-		help: commandHelp.sayHelp,
-	},
-	{
-		name: "share",
-		load: () => import("./commands/share").then(m => m.default),
-		help: commandHelp.shareHelp,
 	},
 	{
 		name: "setup",
@@ -173,11 +136,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.readHelp,
 	},
 	{
-		name: "render",
-		load: () => import("./commands/render").then(m => m.default),
-		help: commandHelp.renderHelp,
-	},
-	{
 		name: "ssh",
 		load: () => import("./commands/ssh").then(m => m.default),
 		help: commandHelp.sshHelp,
@@ -186,11 +144,6 @@ export const commands: CommandEntry[] = [
 		name: "stats",
 		load: () => import("./commands/stats").then(m => m.default),
 		help: commandHelp.statsHelp,
-	},
-	{
-		name: "update",
-		load: () => import("./commands/update").then(m => m.default),
-		help: commandHelp.updateHelp,
 	},
 	{
 		name: "usage",
@@ -213,18 +166,29 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.ttsrHelp,
 	},
 	{
-		name: "worktree",
-		load: () => import("./commands/worktree").then(m => m.default),
-		aliases: ["wt"],
-		help: commandHelp.worktreeHelp,
-	},
-	{
 		name: "search",
 		load: () => import("./commands/web-search").then(m => m.default),
-		aliases: ["q"],
+		aliases: ["q", "web-search"],
 		help: commandHelp.searchHelp,
 	},
 ];
+
+const SUBCOMMAND_NAMES = new Set<string>();
+for (const command of commands) {
+	SUBCOMMAND_NAMES.add(command.name);
+	if (command.aliases) {
+		for (const alias of command.aliases) SUBCOMMAND_NAMES.add(alias);
+	}
+}
+
+/** Commands that accept launch-global flags before their command token. */
+export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
+
+/** Whether a token names a registered top-level command or alias. */
+export function isSubcommand(first: string | undefined): boolean {
+	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
+	return SUBCOMMAND_NAMES.has(first);
+}
 
 // Documented-looking plugin/marketplace verbs that are NOT registered top-level
 // commands. Without a guard `resolveCliArgv` rewrites e.g. `omp marketplace add
@@ -235,23 +199,15 @@ export const commands: CommandEntry[] = [
 // a hint pointing there. See {@link reservedTopLevelWordMessage} for when a hint
 // fires vs. when the argv still falls through to `launch`.
 const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
-	extensions:
-		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
-	list: '`omp list` is not a top-level command. Use `omp plugin list` to list installed plugins, or run `omp launch list` if you meant to send "list" as a prompt.',
-	remove:
-		'`omp remove` is not a top-level command. Use `omp plugin uninstall <name>` to remove a plugin, or run `omp launch remove` if you meant to send "remove" as a prompt.',
-	uninstall:
-		'`omp uninstall` is not a top-level command. Use `omp plugin uninstall <name@marketplace>` to remove a plugin, or run `omp launch uninstall` if you meant to send "uninstall" as a prompt.',
-	marketplace:
-		'`omp marketplace` is not a top-level command. Use `omp plugin marketplace <add|remove|update|list>` to manage marketplaces, or run `omp launch marketplace` if you meant to send "marketplace" as a prompt.',
-	discover:
-		'`omp discover` is not a top-level command. Use `omp plugin discover [marketplace]` to browse available plugins, or run `omp launch discover` if you meant to send "discover" as a prompt.',
-	upgrade:
-		'`omp upgrade` is not a top-level command. Use `omp plugin upgrade [name@marketplace]` to upgrade plugins, or run `omp launch upgrade` if you meant to send "upgrade" as a prompt.',
-	enable:
-		'`omp enable` is not a top-level command. Use `omp plugin enable <name@marketplace>` to enable a plugin, or run `omp launch enable` if you meant to send "enable" as a prompt.',
-	disable:
-		'`omp disable` is not a top-level command. Use `omp plugin disable <name@marketplace>` to disable a plugin, or run `omp launch disable` if you meant to send "disable" as a prompt.',
+	extensions: `\`${CLI_NAME} extensions\` is not a management command. Use \`${CLI_NAME} plugin list\` / \`${CLI_NAME} plugin install\`, or run \`${CLI_NAME} launch extensions\` if you meant to send "extensions" as a prompt.`,
+	list: `\`${CLI_NAME} list\` is not a top-level command. Use \`${CLI_NAME} plugin list\` to list installed plugins, or run \`${CLI_NAME} launch list\` if you meant to send "list" as a prompt.`,
+	remove: `\`${CLI_NAME} remove\` is not a top-level command. Use \`${CLI_NAME} plugin uninstall <name>\` to remove a plugin, or run \`${CLI_NAME} launch remove\` if you meant to send "remove" as a prompt.`,
+	uninstall: `\`${CLI_NAME} uninstall\` is not a top-level command. Use \`${CLI_NAME} plugin uninstall <name@marketplace>\` to remove a plugin, or run \`${CLI_NAME} launch uninstall\` if you meant to send "uninstall" as a prompt.`,
+	marketplace: `\`${CLI_NAME} marketplace\` is not a top-level command. Use \`${CLI_NAME} plugin marketplace <add|remove|update|list>\` to manage marketplaces, or run \`${CLI_NAME} launch marketplace\` if you meant to send "marketplace" as a prompt.`,
+	discover: `\`${CLI_NAME} discover\` is not a top-level command. Use \`${CLI_NAME} plugin discover [marketplace]\` to browse available plugins, or run \`${CLI_NAME} launch discover\` if you meant to send "discover" as a prompt.`,
+	upgrade: `\`${CLI_NAME} upgrade\` is not a top-level command. Use \`${CLI_NAME} plugin upgrade [name@marketplace]\` to upgrade plugins, or run \`${CLI_NAME} launch upgrade\` if you meant to send "upgrade" as a prompt.`,
+	enable: `\`${CLI_NAME} enable\` is not a top-level command. Use \`${CLI_NAME} plugin enable <name@marketplace>\` to enable a plugin, or run \`${CLI_NAME} launch enable\` if you meant to send "enable" as a prompt.`,
+	disable: `\`${CLI_NAME} disable\` is not a top-level command. Use \`${CLI_NAME} plugin disable <name@marketplace>\` to disable a plugin, or run \`${CLI_NAME} launch disable\` if you meant to send "disable" as a prompt.`,
 };
 
 // Sub-actions that make `omp marketplace <sub>` unambiguously a management
@@ -287,17 +243,6 @@ export function reservedTopLevelWordMessage(argv: readonly string[]): string | u
 	return undefined;
 }
 
-/**
- * Return true when `first` matches a registered subcommand name or alias.
- *
- * Flags (`-…`) and `@file` arguments are never subcommands; for those the CLI
- * runner skips ahead to the default `launch` command.
- */
-export function isSubcommand(first: string | undefined): boolean {
-	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
-	return commands.some(entry => entry.name === first || entry.aliases?.includes(first));
-}
-
 export type ResolvedCliArgv = { argv: string[] } | { error: string };
 
 /**
@@ -316,14 +261,6 @@ function leadingSubcommandIndex(argv: string[]): number {
 	}
 	return -1;
 }
-
-/**
- * Subcommands that share the launch flag surface, so leading global flags
- * (`--cwd`, `--model`, `--approval-mode`, …) placed before them are meaningful
- * and must be forwarded ({@link resolveCliArgv}, #2970). Every other subcommand
- * parses only its own flags.
- */
-export const LAUNCH_FLAG_COMMANDS: Record<string, true> = { launch: true, acp: true };
 
 /** Whether `arg` names a flag from the launch surface (bare or `--flag=value`). */
 function isLaunchGlobalFlag(arg: string): boolean {

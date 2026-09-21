@@ -1,0 +1,20 @@
+# Runs the shared build pipeline (tests, then release builds of the clyean CLI
+# and the contained harness) on every commit pushed to any branch, and on pull
+# requests so that commits from forks are covered too.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml

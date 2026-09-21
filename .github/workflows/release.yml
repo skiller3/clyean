@@ -1,0 +1,58 @@
+# Builds and publishes a release for a semantic version tag.
+#
+# Tags created by another workflow using GITHUB_TOKEN (cut-release.yml and
+# release-patch-tag.yml) do not trigger `push` events, by design of GitHub
+# Actions. Those workflows therefore dispatch this one explicitly with
+# `gh workflow run release.yml --ref <tag> -f tag=<tag>`. The `push` trigger
+# remains for tags a person pushes by hand, such as major version bumps.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and publish (must equal the ref the workflow runs from)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-tag:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Validate the tag against the checked-out ref
+        id: resolve
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [ "$REF_TYPE" != "tag" ] || [ "$REF_NAME" != "$tag" ]; then
+            echo "This workflow must run from the release tag itself (ref: ${REF_TYPE}/${REF_NAME}, tag: ${tag})."
+            exit 1
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Tag ${tag} is not a semantic version tag."
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve-tag
+    uses: ./.github/workflows/build.yml
+    with:
+      upload_release_tag: ${{ needs.resolve-tag.outputs.tag }}

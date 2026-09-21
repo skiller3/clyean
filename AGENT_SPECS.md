@@ -37,11 +37,15 @@ There are four possible `prompt_type` values that are mutually exclusive which s
 
 ## Project Locking
 
-As referenced previously, the User Assistant agent must sometimes "lock the project" or "unlock the project" to prevent the creation of inconsistent state or the compilation of innaccurate information by other Clyean processes running in parallel.  If the project's content is being managed via Git Worktrees in a classic manner, then treat both project locking and unlocking as NO-OPs (since the Software Engineering Director has a reasonable mechanism to facilitate concurrent work); otherwise, use a classic file lock (the project's `.clyean/lock` file) to prevent possibly conflicting concurrent activity by other Clyean user agents.
+As referenced previously, the User Assistant agent must sometimes "lock the project" or "unlock the project" to prevent the creation of inconsistent state or the compilation of innaccurate information by other Clyean processes running in parallel.  If the project's content is being managed via Git Worktrees in a classic manner, then treat both project locking and unlocking as NO-OPs (since the Software Engineering Director has a reasonable mechanism to facilitate concurrent work); otherwise, use a classic file lock (the project's `.clyean/lock` file) to prevent possibly conflicting concurrent activity by other Clyean user agents.  Clyean's deterministic orchestrator takes and releases the lock on the User Assistant's behalf for the duration of every scaffolding or delegated unit of work.
 
 ## User Communication
 
 The User Assistant should provide information to the user just as the user would expect from a standard `omp` chat interaction (this include stream-of-consciousness reasoning, errors, and final results).  When delegating processing to sub-agents (like the Scaffolder or Software Engineering Director), the User Assistant agent should continuously provide the user information from the sub-agents, likely via continuously streaming, sanitizing, and summarizing their activity and output.
+
+## Delegation Tools
+
+The User Assistant delegates through tools registered by a Clyean-managed harness extension: `clyean_status` (scaffold state, project type, lock state, incomplete work), `clyean_scaffold` (scaffold with a determined `project_type`), `clyean_delegate` (hand a refined prompt of one of the three software engineering prompt types to the Software Engineering Director; streams progress and returns when the work completes, fails, or needs information), `clyean_provide_information` (return the user's answers to an information request), `clyean_resume` (resume incomplete work), and `clyean_cancel`.  When a delegated tool returns an information request, the User Assistant asks the user with its `ask` tool and answers through `clyean_provide_information`, and the sub-agent sessions of the unit of work stay alive meanwhile.
 
 
 # Scaffolder
@@ -73,7 +77,7 @@ When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_PLANNING`, the Software En
 | Specification Changes | Detailed description of the exact changes (if any) to behavior that will be externally legible to human users, agent users, API consumers, and other stakeholders of the software. Much of the content will fit under the description of "system interface" changes, and the content of this section should accurately and comprehensively describe the changes that will be made to `.clyean/SPECS.md` | Specifier |
 | Implementation Architecture | Detailed description of the exact changes (if any) to the software system's architecture and the manner in which the requested changes will be incorporated into the architecture. The content of this section should accurately and comprehensively describe the changes that will be made to content within the `.clyean/architecture` directory | Software Architect |
 
-To generate a change plan, Clyean's sub-agents should adhere to the workflow described in `workflow-planning.mmd`.
+To generate a change plan, Clyean's sub-agents should adhere to the workflow described in `workflow-planning.mmd`.  Each review loop in that workflow is bounded to three revisions before the unit of work fails with the outstanding issues.  Sub-agents report their decisions at each step with a verdict object in a fenced `json` block at the end of their reply, using the schemas stated in their baseline instructions.
 
 ## Implementation Prompt Handling
 
@@ -81,7 +85,7 @@ When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_IMPLEMENTATION`, the Softw
 1. Create a change plan in accordance to the preceding "Planning Prompt Handling" section if it doesn't already exist.
 2. Implement the relevant change plan in concert with other Clyean sub-agents in adherence to the workflow described in `workflow-implementation.mmd`.
 
-For avoidance of doubt, the `sed4["Software Engineering Director: Re-run the planning workflow that generated the change plan with the additional concern of resolving the blocking issue"]` node in `workflow-implementation.mmd` represents re-execution of the preceding sub-section ("Planning Prompt Handling") with the intent of producing a new version of the change plan.  New versions of change plans should not clobber old versions via in-place plan file edits; instead, Clyean's change plan naming and tracking conventions should gracefully support incremental "versions" of a change plan.
+For avoidance of doubt, the `sed4["Software Engineering Director: Re-run the planning workflow that generated the change plan with the additional concern of resolving the blocking issue"]` node in `workflow-implementation.mmd` represents re-execution of the preceding sub-section ("Planning Prompt Handling") with the intent of producing a new version of the change plan.  New versions of change plans should not clobber old versions via in-place plan file edits; instead, Clyean's change plan naming and tracking conventions should gracefully support incremental "versions" of a change plan.  Re-planning is bounded to two cycles per unit of work, the implementation review loop to three remediation rounds, and diagram rendering to three attempts, after which the unit of work fails with the outstanding issue.  After each completed step the orchestrator renders the architecture diagrams when they changed and commits the step's artifacts under the identity of the agent that produced them.
 
 # Specifier
 

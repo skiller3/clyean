@@ -1,0 +1,6 @@
+@startuml
+title {{PROJECT_NAME}}: Object Diagram
+' A snapshot of representative object instances and their links at one point in time.
+object placeholder
+note right of placeholder : Replace with representative instances.
+@enduml

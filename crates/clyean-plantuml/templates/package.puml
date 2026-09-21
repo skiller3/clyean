@@ -1,0 +1,7 @@
+@startuml
+title {{PROJECT_NAME}}: Package Diagram
+' Packages (modules) and the dependencies between them.
+package "Placeholder" {
+}
+note right of Placeholder : Replace with the project's packages.
+@enduml

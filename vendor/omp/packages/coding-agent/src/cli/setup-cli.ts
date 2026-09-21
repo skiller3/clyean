@@ -4,15 +4,19 @@
  * Handles `omp setup` for onboarding and `omp setup <component>` for optional dependencies.
  */
 import * as path from "node:path";
-import { APP_NAME, getProjectDir, getPythonEnvDir } from "@oh-my-pi/pi-utils";
+import { CLI_NAME, getProjectDir, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { Settings, settings } from "../config/settings";
+import { Settings } from "../config/settings";
+import { ModelRegistry } from "../config/model-registry";
+import { resolveRoleChain } from "../config/model-resolver";
+import { roleCandidatePool } from "../config/model-roles";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
-import { theme } from "../modes/theme/theme";
+import { discoverAuthStorage } from "../session/auth-broker-config";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import { downloadSttModel, isSttModelCached } from "../stt/downloader";
 import { isSttModelKey, STT_MODEL_OPTIONS } from "../stt/models";
-import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODEL_OPTIONS } from "../tts";
-import { selectSetupModel } from "./setup-model-picker";
+import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODELS } from "../tts";
+import { selectSetupModel } from "@oh-my-pi/pi-tui/apps/setup-model-picker";
 
 export type SetupComponent = "python" | "speech";
 
@@ -38,7 +42,7 @@ export function parseSetupArgs(args: string[]): SetupCommandArgs | undefined {
 	}
 
 	if (args.length < 2) {
-		console.error(chalk.red(`Usage: ${APP_NAME} setup <component>`));
+		console.error(chalk.red(`Usage: ${CLI_NAME} setup <component>`));
 		console.error(`Valid components: ${VALID_COMPONENTS.join(", ")}`);
 		process.exit(1);
 	}
@@ -159,55 +163,68 @@ interface SpeechComponent {
 	ensure(onProgress: (progress: { stage: string; percent?: number }) => void): Promise<void>;
 }
 
-function buildSpeechComponents(): SpeechComponent[] {
+function resolveLocalSpeechModelId(role: "speech" | "dictation", settings: Settings, registry: ModelRegistry): string {
+	const candidate = resolveRoleChain(role, settings, roleCandidatePool(role, settings, registry)).find(
+		entry => entry.model.provider === "local",
+	);
+	if (!candidate) throw new Error(`No local model is available for the ${role} role.`);
+	return candidate.model.id;
+}
+
+function buildSpeechComponents(settings: Settings, registry: ModelRegistry): SpeechComponent[] {
+	const localRoleModelIds = (role: "speech" | "dictation") =>
+		new Set(
+			roleCandidatePool(role, settings, registry)
+				.filter(model => model.provider === "local")
+				.map(model => model.id),
+		);
+	const sttOptions = STT_MODEL_OPTIONS.filter(option => localRoleModelIds("dictation").has(option.value));
+	const ttsOptions = TTS_LOCAL_MODELS.filter(model => localRoleModelIds("speech").has(model.key)).map(
+		({ key, label, description }) => ({ value: key, label, description }),
+	);
+
 	return [
 		{
 			name: "Speech-to-Text model",
-			isReady: () => isSttModelCached(settings.get("stt.modelName")),
+			isReady: () => isSttModelCached(resolveLocalSpeechModelId("dictation", settings, registry)),
 			status: async () => {
-				const key = settings.get("stt.modelName");
+				const key = resolveLocalSpeechModelId("dictation", settings, registry);
 				return (await isSttModelCached(key)) ? key : `${key} — not downloaded`;
 			},
 			pick: async () => {
-				const chosen = await selectSetupModel(
-					"Speech-to-Text model",
-					[...STT_MODEL_OPTIONS],
-					settings.get("stt.modelName"),
-				);
+				const current = resolveLocalSpeechModelId("dictation", settings, registry);
+				const chosen = await selectSetupModel("Speech-to-Text model", sttOptions, current);
 				if (chosen === null) return false;
 				if (isSttModelKey(chosen)) {
-					settings.set("stt.modelName", chosen);
+					settings.setModelRole("dictation", `local/${chosen}`);
 					await settings.flush();
 				}
 				return true;
 			},
 			ensure: onProgress =>
-				downloadSttModel(settings.get("stt.modelName"), progress =>
+				downloadSttModel(resolveLocalSpeechModelId("dictation", settings, registry), progress =>
 					onProgress({ stage: `Downloading ${progress.label} model`, percent: progress.percent }),
 				),
 		},
 		{
 			name: "Text-to-Speech model",
-			isReady: () => isTtsModelCached(settings.get("tts.localModel")),
+			isReady: () => isTtsModelCached(resolveLocalSpeechModelId("speech", settings, registry)),
 			status: async () => {
-				const key = settings.get("tts.localModel");
+				const key = resolveLocalSpeechModelId("speech", settings, registry);
 				return (await isTtsModelCached(key)) ? key : `${key} — model/runtime not installed`;
 			},
 			pick: async () => {
-				const chosen = await selectSetupModel(
-					"Text-to-Speech model",
-					[...TTS_LOCAL_MODEL_OPTIONS],
-					settings.get("tts.localModel"),
-				);
+				const current = resolveLocalSpeechModelId("speech", settings, registry);
+				const chosen = await selectSetupModel("Text-to-Speech model", ttsOptions, current);
 				if (chosen === null) return false;
 				if (isTtsLocalModelKey(chosen)) {
-					settings.set("tts.localModel", chosen);
+					settings.setModelRole("speech", `local/${chosen}`);
 					await settings.flush();
 				}
 				return true;
 			},
 			ensure: async onProgress => {
-				const ok = await downloadTtsModel(settings.get("tts.localModel"), progress =>
+				const ok = await downloadTtsModel(resolveLocalSpeechModelId("speech", settings, registry), progress =>
 					onProgress({ stage: progress.stage, percent: progress.percent }),
 				);
 				if (!ok) throw new Error("Failed to download the local text-to-speech model.");
@@ -223,8 +240,9 @@ function buildSpeechComponents(): SpeechComponent[] {
  * values).
  */
 async function handleSpeechSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
-	await Settings.init({ cwd: getProjectDir() });
-	const components = buildSpeechComponents();
+	const [settings, authStorage] = await Promise.all([Settings.init({ cwd: getProjectDir() }), discoverAuthStorage()]);
+	const registry = new ModelRegistry(authStorage, undefined, { settings });
+	const components = buildSpeechComponents(settings, registry);
 
 	if (flags.json) {
 		const report: Record<string, { ready: boolean; status: string }> = {};
@@ -288,11 +306,11 @@ async function handleSpeechSetup(flags: { json?: boolean; check?: boolean }): Pr
  * Print setup command help.
  */
 export function printSetupHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Run onboarding or install dependencies for optional features
+	console.log(`${chalk.bold(`${CLI_NAME} setup`)} - Run onboarding or install dependencies for optional features
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} setup                     Run the onboarding wizard
-  ${APP_NAME} setup <component> [options]
+  ${CLI_NAME} setup                     Run the onboarding wizard
+  ${CLI_NAME} setup <component> [options]
 
 ${chalk.bold("Components:")}
   python    Verify a Python 3 interpreter is reachable for code execution
@@ -303,10 +321,10 @@ ${chalk.bold("Options:")}
   --json        Output status as JSON
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} setup                  Run the onboarding wizard
-  ${APP_NAME} setup python           Check Python execution dependencies
-  ${APP_NAME} setup speech           Pick and download the STT and TTS models
-  ${APP_NAME} setup speech --check   Check if speech dependencies are available
-  ${APP_NAME} setup python --check   Check if Python execution is available
+  ${CLI_NAME} setup                  Run the onboarding wizard
+  ${CLI_NAME} setup python           Check Python execution dependencies
+  ${CLI_NAME} setup speech           Pick and download the STT and TTS models
+  ${CLI_NAME} setup speech --check   Check if speech dependencies are available
+  ${CLI_NAME} setup python --check   Check if Python execution is available
 `);
 }

@@ -1,0 +1,8 @@
+@startuml
+title {{PROJECT_NAME}}: Activity Diagram
+' A workflow of actions, decisions, and flows.
+start
+:Placeholder action;
+stop
+note right : Replace with a principal workflow.
+@enduml

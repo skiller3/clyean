@@ -1,0 +1,7 @@
+@startuml
+title {{PROJECT_NAME}}: Composite Structure Diagram
+' Internal structure of a classifier: parts, ports, and connectors.
+class Placeholder {
+}
+note right of Placeholder : Replace with a classifier and its internal parts.
+@enduml

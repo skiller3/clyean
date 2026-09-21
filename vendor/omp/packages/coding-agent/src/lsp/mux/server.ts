@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
-import { isRecord, logger, postmortem, ptree, setProcessName } from "@oh-my-pi/pi-utils";
+import { CLI_NAME, isRecord, logger, postmortem, ptree, setProcessName } from "@oh-my-pi/pi-utils";
 import { MessageFramer } from "../../jsonrpc/message-framing";
 import type { LspJsonRpcId, LspJsonRpcNotification, LspJsonRpcRequest, LspJsonRpcResponse } from "../types";
 import {
@@ -277,19 +277,24 @@ export class LspMuxServer {
 		this.#sessions.add(session);
 		this.#disarmMuxIdle();
 		socket.on("data", chunk => {
-			session.framer.push(Buffer.from(chunk));
-			for (const text of session.framer.drain(header => {
-				logger.warn("LSP mux client framing resync", { header: header.slice(0, 200) });
-			})) {
-				try {
-					const parsed: unknown = JSON.parse(text);
-					if (!isRecord(parsed) || parsed.jsonrpc !== "2.0") throw new Error("invalid JSON-RPC message");
-					void this.#fromSession(session, parsed as unknown as RpcMessage).catch(error => {
-						logger.warn("LSP mux client message handling failed", { error: String(error) });
-					});
-				} catch (error) {
-					logger.warn("LSP mux client sent malformed JSON", { error: String(error) });
+			try {
+				session.framer.push(Buffer.from(chunk));
+				for (const text of session.framer.drain(header => {
+					logger.warn("LSP mux client framing resync", { header: header.slice(0, 200) });
+				})) {
+					try {
+						const parsed: unknown = JSON.parse(text);
+						if (!isRecord(parsed) || parsed.jsonrpc !== "2.0") throw new Error("invalid JSON-RPC message");
+						void this.#fromSession(session, parsed as unknown as RpcMessage).catch(error => {
+							logger.warn("LSP mux client message handling failed", { error: String(error) });
+						});
+					} catch (error) {
+						logger.warn("LSP mux client sent malformed JSON", { error: String(error) });
+					}
 				}
+			} catch (error) {
+				logger.warn("LSP mux client framing failed", { error: String(error) });
+				socket.destroy();
 			}
 		});
 		socket.on("error", error => logger.warn("LSP mux session socket error", { error: error.message }));
@@ -472,6 +477,7 @@ export class LspMuxServer {
 			}
 		} catch (error) {
 			logger.warn("LSP mux server reader failed", { server: server.key, error: String(error) });
+			this.#killServer(server);
 		} finally {
 			reader.releaseLock();
 		}
@@ -732,7 +738,7 @@ export async function startLspMuxFromEnvironment(): Promise<void> {
 	if (!endpoint || !projectDir) throw new Error("LSP mux environment is incomplete");
 	delete process.env[LSP_MUX_SOCKET_ENV];
 	delete process.env[LSP_MUX_PROJECT_DIR_ENV];
-	setProcessName("omp lsp mux");
+	setProcessName(`${CLI_NAME} lsp mux`);
 	const server = new LspMuxServer();
 	const stopped = Promise.withResolvers<void>();
 	server.onIdle = () => {

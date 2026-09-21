@@ -1,0 +1,8 @@
+@startuml
+title {{PROJECT_NAME}}: Deployment Diagram
+' Execution environments, nodes, and the artifacts deployed on them.
+node "Placeholder Node" {
+  artifact "placeholder"
+}
+note right of "Placeholder Node" : Replace with the deployment topology.
+@enduml

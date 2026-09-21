@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" width="640" height="220" role="img" aria-labelledby="title desc">
+  <title id="title">Clyean</title>
+  <desc id="desc">A bar of soap with a glossy highlight and rising bubbles beside the Clyean wordmark.</desc>
+  <defs>
+    <linearGradient id="soap" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f84fcc"/>
+      <stop offset="0.5" stop-color="#9362f4"/>
+      <stop offset="1" stop-color="#00dbe4"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- bar of soap -->
+  <rect x="24" y="72" width="184" height="112" rx="40" ry="40" fill="url(#soap)"/>
+  <rect x="40" y="90" width="152" height="18" rx="9" ry="9" fill="url(#shine)"/>
+  <path d="M60 158 Q116 134 172 158" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="6" stroke-linecap="round"/>
+  <!-- rising bubbles -->
+  <circle cx="190" cy="52" r="14" fill="none" stroke="#00dbe4" stroke-width="5"/>
+  <circle cx="220" cy="30" r="8" fill="none" stroke="#9362f4" stroke-width="4"/>
+  <circle cx="160" cy="34" r="5" fill="none" stroke="#f84fcc" stroke-width="3"/>
+  <!-- wordmark -->
+  <text x="252" y="150" font-family="Archivo, 'Helvetica Neue', Arial, sans-serif" font-size="96" font-weight="800" letter-spacing="-2" fill="#1c1c28">Clyean</text>
+</svg>

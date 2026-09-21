@@ -1,0 +1,11 @@
+@startuml
+title {{PROJECT_NAME}}: Timing Diagram
+' State of participants over time.
+robust "Placeholder" as P
+@0
+P is Idle
+@10
+P is Active
+@20
+P is Idle
+@enduml

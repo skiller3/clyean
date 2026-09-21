@@ -47,6 +47,15 @@ MIT from their own copyright holders.
 Oh-My-Pi in turn vendors and depends on further third-party components, whose
 licenses and notices are recorded in `vendor/omp/THIRD-PARTY-NOTICES.txt`.
 
+`extensions/clyean-herdr-reporter.ts` is derived from Herdr's Oh-My-Pi
+integration asset (https://github.com/herdrdev/herdr, file
+`src/integration/assets/omp/herdr-agent-state.ts`), which is licensed under
+the Apache License, Version 2.0. The derived file is distributed as part of
+Clyean under the AGPL terms described above, and the Apache-licensed portions
+remain available to you under the Apache License 2.0 from their own copyright
+holders. A copy of the Apache License 2.0 is available at
+http://www.apache.org/licenses/LICENSE-2.0.
+
 
 OTHER LICENSES
 --------------

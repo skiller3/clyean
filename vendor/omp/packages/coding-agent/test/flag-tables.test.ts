@@ -86,10 +86,10 @@ describe("--session-dir", () => {
 });
 
 describe("--tools validation", () => {
-	it("maps search and find to grep and glob", () => {
+	it("maps legacy search to grep and keeps find canonical", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
-		expect(result.tools).toEqual(["grep", "glob"]);
+		expect(result.tools).toEqual(["grep", "find"]);
 	});
 
 	it("defers unknown-name validation until all session tools are discovered", () => {
@@ -171,17 +171,15 @@ describe("parseArgs @file parsing with quotes", () => {
 	});
 });
 
-describe("foreign session import flags", () => {
-	it("parses each source flag without consuming the initial message", () => {
+describe("foreign session import flags (retired by Clyean)", () => {
+	it("reports the retired source flags as unrecognized", () => {
 		const claude = parseArgs(["--from-claude", "continue this session"]);
 		const codex = parseArgs(["--from-codex", "continue this session"]);
 
-		expect(claude.fromClaude).toBe(true);
-		expect(claude.messages).toEqual(["continue this session"]);
-		expect(claude.unrecognizedFlags).toEqual([]);
-		expect(codex.fromCodex).toBe(true);
-		expect(codex.messages).toEqual(["continue this session"]);
-		expect(codex.unrecognizedFlags).toEqual([]);
+		expect(claude.fromClaude).toBeUndefined();
+		expect(claude.unrecognizedFlags).toEqual(["--from-claude"]);
+		expect(codex.fromCodex).toBeUndefined();
+		expect(codex.unrecognizedFlags).toEqual(["--from-codex"]);
 	});
 });
 
@@ -196,9 +194,10 @@ describe("restartArgv (/restart relaunch argv)", () => {
 	});
 
 	it("drops every session-source flag, including inline = and value forms", () => {
-		expect(
-			restartArgv(["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz", "--from-claude"], "sid"),
-		).toEqual(["--resume", "sid"]);
+		expect(restartArgv(["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz"], "sid")).toEqual([
+			"--resume",
+			"sid",
+		]);
 	});
 
 	it("keeps the value of an unknown extension flag instead of dropping it as a positional", () => {
@@ -221,5 +220,22 @@ describe("restartArgv (/restart relaunch argv)", () => {
 
 	it("omits --resume for a session that never materialized on disk", () => {
 		expect(restartArgv(["--no-session", "hello"], undefined)).toEqual(["--no-session"]);
+	});
+});
+describe("--system-prompt-template", () => {
+	it("parses a template path without leaking it into the prompt", () => {
+		const result = parseArgs(["--system-prompt-template", "/tmp/SYSTEM_TEMPLATE.md", "hello"]);
+
+		expect(result.systemPromptTemplate).toBe("/tmp/SYSTEM_TEMPLATE.md");
+		expect(result.systemPrompt).toBeUndefined();
+		expect(result.messages).toEqual(["hello"]);
+	});
+
+	it("supports equals syntax and consumes flag-looking values", () => {
+		const result = parseArgs(["--system-prompt-template=--profile", "hello"]);
+
+		expect(result.systemPromptTemplate).toBe("--profile");
+		expect(result.profile).toBeUndefined();
+		expect(result.messages).toEqual(["hello"]);
 	});
 });

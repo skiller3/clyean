@@ -1,0 +1,9 @@
+@startuml
+title {{PROJECT_NAME}}: Use Case Diagram
+' Actors and the use cases the system offers them.
+left to right direction
+actor User
+usecase "Placeholder use case" as UC1
+User --> UC1
+note right of UC1 : Replace with the project's actors and use cases.
+@enduml

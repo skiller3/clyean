@@ -31,7 +31,7 @@
  */
 
 import { isServiceTierOpenAISettingValue, SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { Args } from "./args";
 import { CliUsageError } from "./usage-error";
 
@@ -166,6 +166,9 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--system-prompt": (result, value) => {
 		result.systemPrompt = value;
 	},
+	"--system-prompt-template": (result, value) => {
+		result.systemPromptTemplate = value;
+	},
 	"--append-system-prompt": (result, value) => {
 		result.appendSystemPrompt = value;
 	},
@@ -295,8 +298,6 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--version",
 	"--allow-home",
 	"--continue",
-	"--from-claude",
-	"--from-codex",
 	"--no-session",
 	"--no-tools",
 	"--no-lsp",
@@ -371,8 +372,6 @@ const SESSION_SOURCE_FLAGS: ReadonlySet<string> = new Set([
 	"--continue",
 	"-c",
 	"--fork",
-	"--from-claude",
-	"--from-codex",
 ]);
 
 /**

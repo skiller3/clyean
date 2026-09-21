@@ -1,0 +1,8 @@
+@startuml
+title {{PROJECT_NAME}}: Communication Diagram
+' Interactions organized around the links between participants.
+object Caller
+object Placeholder
+Caller -> Placeholder : 1: request
+note right of Placeholder : Replace with a principal interaction organized by links.
+@enduml
