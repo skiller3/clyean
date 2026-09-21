@@ -44,7 +44,9 @@ export const GLYPH_BUNDLE: GlyphBundle = bundle;
 
 /**
  * Codepoint the handshake queries after registration to confirm the bundle
- * was accepted: the omp mark (`icon.omp`), which the status line always shows.
+ * was accepted: upstream's pi mark, kept because the checked-in bundle carries
+ * its outline. Clyean's status-line mark (`icon.omp`) is a different glyph and
+ * is not part of the bundle.
  */
 export const GLYPH_CONFIRMATION_CODEPOINT = 0xf0d57;
 

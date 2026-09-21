@@ -121,7 +121,8 @@ describe("collab host registry (two-process smoke)", () => {
 		expect(pruned).toBe(true);
 	}, 40_000);
 
-	it("lists metadata and explicitly retrieves control or view links through the real CLI under a fake HOME", async () => {
+	// Clyean prunes the `collab` subcommand from the command table (see cli-commands.ts).
+	it.skip("lists metadata and explicitly retrieves control or view links through the real CLI under a fake HOME", async () => {
 		const home = await tempDir("omp-collab-smoke-home-");
 		const marker = `cli-${Date.now().toString(36)}`;
 		const instanceId = "cli-host";

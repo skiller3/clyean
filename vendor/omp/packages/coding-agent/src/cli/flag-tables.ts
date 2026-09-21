@@ -298,8 +298,6 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--version",
 	"--allow-home",
 	"--continue",
-	"--from-claude",
-	"--from-codex",
 	"--no-session",
 	"--no-tools",
 	"--no-lsp",
@@ -374,8 +372,6 @@ const SESSION_SOURCE_FLAGS: ReadonlySet<string> = new Set([
 	"--continue",
 	"-c",
 	"--fork",
-	"--from-claude",
-	"--from-codex",
 ]);
 
 /**

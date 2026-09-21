@@ -2,7 +2,7 @@
  * CLI argument parsing and help display
  */
 import * as path from "node:path";
-import { $env, APP_NAME, logger } from "@oh-my-pi/pi-utils";
+import { $env, CLI_NAME, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ServiceTierOpenAISettingValue } from "../config/service-tier";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel, parseCliThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -235,16 +235,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.profile = args[++i];
 		} else if (arg.startsWith("--profile=")) {
 			result.profile = arg.slice("--profile=".length);
-		} else if (arg === "--alias" && i + 1 < args.length) {
-			result.alias = args[++i];
-		} else if (arg.startsWith("--alias=")) {
-			result.alias = arg.slice("--alias=".length);
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
-		} else if (arg === "--from-claude") {
-			result.fromClaude = true;
-		} else if (arg === "--from-codex") {
-			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
 		} else if (arg === "--no-tools") {
@@ -361,7 +353,7 @@ export function reportUnrecognizedFlags(
 	const flags = args.unrecognizedFlags;
 	const plural = flags.length === 1 ? "" : "s";
 	write(`${chalk.red(`Error: unknown flag${plural}: ${flags.join(", ")}`)}\n`);
-	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	write(`Run \`${CLI_NAME} --help\` for available flags.\n`);
 	return true;
 }
 
@@ -372,15 +364,15 @@ export function reportCliUsageError(
 ): boolean {
 	if (!(error instanceof CliUsageError)) return false;
 	write(`${chalk.red(`Error: ${error.message}`)}\n`);
-	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	write(`Run \`${CLI_NAME} --help\` for available flags.\n`);
 	return true;
 }
 
 export function printHelp(): void {
 	process.stdout.write(
-		`${chalk.bold(APP_NAME)} - AI coding assistant\n\n` +
-			`Run ${APP_NAME} --help for full command and option details.\n` +
-			`Run ${APP_NAME} <command> --help for command-specific help.\n\n` +
+		`${chalk.bold(CLI_NAME)} - AI coding assistant\n\n` +
+			`Run ${CLI_NAME} --help for full command and option details.\n` +
+			`Run ${CLI_NAME} <command> --help for command-specific help.\n\n` +
 			`${getExtraHelpText()}\n`,
 	);
 }

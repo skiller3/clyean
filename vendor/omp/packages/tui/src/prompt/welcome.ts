@@ -1,7 +1,7 @@
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { CLI_NAME, HARNESS_ATTRIBUTION } from "@oh-my-pi/pi-utils/dirs";
 import { theme } from "../theme/theme";
 import tipsText from "./tips.txt" with { type: "text" };
 
@@ -130,7 +130,8 @@ export interface LspServerInfo {
 }
 
 /**
- * Premium welcome screen with block-based OMP logo and two-column layout.
+ * Premium welcome screen with the block-based Clyean soap-bar logo, a
+ * two-column layout, and a full-width harness attribution band.
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
@@ -380,7 +381,7 @@ export class WelcomeComponent implements Component {
 		const lines: string[] = [];
 
 		// Top border with embedded title
-		const title = ` ${APP_NAME} v${this.version} `;
+		const title = ` ${CLI_NAME} v${this.version} `;
 		const titlePrefixRaw = hChar.repeat(3);
 		const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
 		const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
@@ -403,12 +404,23 @@ export class WelcomeComponent implements Component {
 				lines.push(v + left + v);
 			}
 		}
-		// Bottom border
+		// Attribution band: a full-width row set under the columns, wrapped to
+		// the box so it survives narrow terminals.
+		const innerWidth = boxWidth - 2;
+		const teeRight = theme.fg("dim", theme.boxRound.teeRight);
+		const teeLeft = theme.fg("dim", theme.boxRound.teeLeft);
 		if (showRightColumn) {
-			lines.push(bl + h.repeat(leftCol) + theme.fg("dim", theme.boxRound.teeUp) + h.repeat(rightCol) + br);
+			lines.push(
+				teeRight + h.repeat(leftCol) + theme.fg("dim", theme.boxRound.teeUp) + h.repeat(rightCol) + teeLeft,
+			);
 		} else {
-			lines.push(bl + h.repeat(leftCol) + br);
+			lines.push(teeRight + h.repeat(leftCol) + teeLeft);
 		}
+		for (const line of renderAttributionLines(innerWidth)) {
+			lines.push(v + line + v);
+		}
+		// Bottom border
+		lines.push(bl + h.repeat(innerWidth) + br);
 
 		// Randomly picked tip, rendered directly beneath the box.
 		lines.push(...this.#renderTip(boxWidth));
@@ -477,8 +489,26 @@ export class WelcomeComponent implements Component {
 	}
 }
 
-/** Block-grid brand mark shared by the welcome and setup surfaces. */
-export const PI_LOGO = ["████████████", "   ██  ██   ", "   ██  ██   ", "   ▒▒  ██   ", "       ██   "];
+/**
+ * Wrap the harness attribution to the inner box width, one leading space per
+ * line. Returns `[]` when the box is too narrow to show any text. Exported for
+ * tests.
+ */
+export function renderAttributionLines(innerWidth: number): string[] {
+	const bodyBudget = innerWidth - 2;
+	if (bodyBudget < 8) return [];
+	return wrapTextWithAnsi(HARNESS_ATTRIBUTION, bodyBudget).map(line => {
+		const styled = ` ${theme.fg("muted", line)}`;
+		return styled + padding(Math.max(0, innerWidth - visibleWidth(styled)));
+	});
+}
+
+/**
+ * Block-grid brand mark shared by the welcome and setup surfaces: a bar of
+ * soap with a glossy highlight band and two bubbles rising from it. Every row
+ * is 12 cells wide, the width budget the welcome layout reserves for the logo.
+ */
+export const BRAND_LOGO = ["   ○     ○  ", " ▗████████▖ ", " ██▓▒░░▒▓██ ", " ██████████ ", " ▝████████▘ "];
 
 /** Multi-stop palette for the diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
@@ -598,8 +628,8 @@ function introLogoFrame(progress: number): string[] {
 	const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
 	const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
 	const shineStrength = (1 - eased) ** 1.5;
-	return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
+	return gradientLogo(BRAND_LOGO, phase, { strength: shineStrength, pos: shinePos });
 }
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
-const REST_FRAME = gradientLogo(PI_LOGO, 0);
+const REST_FRAME = gradientLogo(BRAND_LOGO, 0);

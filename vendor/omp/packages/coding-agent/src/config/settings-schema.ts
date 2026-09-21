@@ -2137,12 +2137,12 @@ export const SETTINGS_SCHEMA = {
 
 	"startup.checkUpdate": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "interaction",
 			group: "Startup & Updates",
 			label: "Check for Updates",
-			description: "Check for omp updates on startup",
+			description: "Check for harness updates on startup (off: the clyean host program manages harness upgrades)",
 		},
 	},
 	"update.channel": {

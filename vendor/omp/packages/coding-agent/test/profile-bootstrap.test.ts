@@ -8,12 +8,10 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--profile", "work"])).toEqual({
 			argv: [],
 			profile: "work",
-			aliasName: undefined,
 		});
 		expect(extractProfileFlags(["foo", "--profile=work", "bar"])).toEqual({
 			argv: ["foo", "bar"],
 			profile: "work",
-			aliasName: undefined,
 		});
 	});
 
@@ -41,7 +39,6 @@ describe("extractProfileFlags", () => {
 		expect(extracted).toEqual({
 			argv: ["--plan", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
 			profile: "work",
-			aliasName: undefined,
 		});
 
 		const parsed = parseArgs(extracted.argv, new Map([["plan", { type: "boolean" }]]));
@@ -95,7 +92,6 @@ describe("extractProfileFlags", () => {
 		expect(extracted).toEqual({
 			argv: ["--resume", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
 			profile: "work",
-			aliasName: undefined,
 		});
 
 		const parsed = parseArgs(extracted.argv);
@@ -108,7 +104,6 @@ describe("extractProfileFlags", () => {
 		expect(extracted).toEqual({
 			argv: ["--some-ext-flag", PROFILE_BOOTSTRAP_BOUNDARY_ARG, "follow up"],
 			profile: "work",
-			aliasName: undefined,
 		});
 
 		const parsed = parseArgs(extracted.argv, new Map([["some-ext-flag", { type: "string" }]]));
@@ -126,22 +121,15 @@ describe("extractProfileFlags", () => {
 	});
 
 	it("honors `--` and stops scanning for flags", () => {
-		const result = extractProfileFlags(["--", "--profile", "foo", "--alias", "bar"]);
+		const result = extractProfileFlags(["--", "--profile", "foo"]);
 		expect(result.profile).toBeUndefined();
-		expect(result.aliasName).toBeUndefined();
-		expect(result.argv).toEqual(["--", "--profile", "foo", "--alias", "bar"]);
+		expect(result.argv).toEqual(["--", "--profile", "foo"]);
 	});
 
 	it("rejects --profile without a value", () => {
 		expect(() => extractProfileFlags(["--profile"])).toThrow("--profile requires a profile name");
 		expect(() => extractProfileFlags(["--profile", "--version"])).toThrow("--profile requires a profile name");
 		expect(() => extractProfileFlags(["--profile="])).toThrow("--profile requires a profile name");
-	});
-
-	it("rejects --alias without a value", () => {
-		expect(() => extractProfileFlags(["--alias"])).toThrow("--alias requires a command name");
-		expect(() => extractProfileFlags(["--alias", "--profile"])).toThrow("--alias requires a command name");
-		expect(() => extractProfileFlags(["--alias="])).toThrow("--alias requires a command name");
 	});
 
 	it("stops extracting global flags at a subcommand boundary", () => {
@@ -159,10 +147,9 @@ describe("extractProfileFlags", () => {
 	});
 
 	it("treats explicit launch as the default command and keeps extracting globals", () => {
-		expect(extractProfileFlags(["launch", "--profile", "work", "--alias", "omp-work"])).toEqual({
+		expect(extractProfileFlags(["launch", "--profile", "work"])).toEqual({
 			argv: ["launch"],
 			profile: "work",
-			aliasName: "omp-work",
 		});
 	});
 
@@ -170,7 +157,6 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["acp", "--profile", "work"])).toEqual({
 			argv: ["acp"],
 			profile: "work",
-			aliasName: undefined,
 		});
 	});
 
@@ -211,22 +197,18 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--print", "--profile", "work"])).toEqual({
 			argv: ["--print"],
 			profile: "work",
-			aliasName: undefined,
 		});
 		expect(extractProfileFlags(["--yolo", "--profile", "work"])).toEqual({
 			argv: ["--yolo"],
 			profile: "work",
-			aliasName: undefined,
 		});
 		expect(extractProfileFlags(["--no-tools", "--profile", "work"])).toEqual({
 			argv: ["--no-tools"],
 			profile: "work",
-			aliasName: undefined,
 		});
 		expect(extractProfileFlags(["-p", "--profile", "work"])).toEqual({
 			argv: ["-p"],
 			profile: "work",
-			aliasName: undefined,
 		});
 	});
 
@@ -239,12 +221,10 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--bar", "value", "--profile", "work"])).toEqual({
 			argv: ["--bar", "value"],
 			profile: "work",
-			aliasName: undefined,
 		});
 		expect(extractProfileFlags(["--bar", "config"])).toEqual({
 			argv: ["--bar", "config"],
 			profile: undefined,
-			aliasName: undefined,
 		});
 	});
 
@@ -257,12 +237,6 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--some-ext-flag", "--profile", "work"])).toEqual({
 			argv: ["--some-ext-flag"],
 			profile: "work",
-			aliasName: undefined,
-		});
-		expect(extractProfileFlags(["--some-ext-flag", "--alias", "omp-work"])).toEqual({
-			argv: ["--some-ext-flag"],
-			profile: undefined,
-			aliasName: "omp-work",
 		});
 	});
 
@@ -274,7 +248,6 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--some-ext-flag", "--", "--profile", "work"])).toEqual({
 			argv: ["--some-ext-flag", "--", "--profile", "work"],
 			profile: undefined,
-			aliasName: undefined,
 		});
 	});
 
@@ -284,7 +257,6 @@ describe("extractProfileFlags", () => {
 		expect(extractProfileFlags(["--bar=x", "--profile", "work"])).toEqual({
 			argv: ["--bar=x"],
 			profile: "work",
-			aliasName: undefined,
 		});
 	});
 });

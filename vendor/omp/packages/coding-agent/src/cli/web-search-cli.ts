@@ -4,7 +4,7 @@
  * Handles `omp q`/`omp web-search` subcommands for testing web search models.
  */
 
-import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
+import { CLI_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Settings } from "../config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -104,11 +104,11 @@ export async function runSearchCommand(cmd: SearchCommandArgs): Promise<void> {
 }
 
 export function printSearchHelp(): void {
-	process.stdout.write(`${chalk.bold(`${APP_NAME} q`)} - Test web search models
+	process.stdout.write(`${chalk.bold(`${CLI_NAME} q`)} - Test web search models
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} q [options] <query>
-  ${APP_NAME} web-search [options] <query>
+  ${CLI_NAME} q [options] <query>
+  ${CLI_NAME} web-search [options] <query>
 
 ${chalk.bold("Arguments:")}
   query      Search query text
@@ -127,8 +127,8 @@ ${chalk.bold("Query directives:")}
   lenient post-filter (a constraint matching nothing is relaxed, not fatal).
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} q --model=web/duckduckgo "what's the color of the sky"
-  ${APP_NAME} q --model=openrouter/google/gemini-2.5-flash --recency=week "latest TypeScript changes"
-  ${APP_NAME} q 'transformer scaling site:arxiv.org after:2024 -site:reddit.com'
+  ${CLI_NAME} q --model=web/duckduckgo "what's the color of the sky"
+  ${CLI_NAME} q --model=openrouter/google/gemini-2.5-flash --recency=week "latest TypeScript changes"
+  ${CLI_NAME} q 'transformer scaling site:arxiv.org after:2024 -site:reddit.com'
 `);
 }

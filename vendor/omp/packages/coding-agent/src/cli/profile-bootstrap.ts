@@ -1,5 +1,5 @@
 /**
- * Bootstrap-time argv preparser for the global `--profile` / `--alias` flags.
+ * Bootstrap-time argv preparser for the global `--profile` flag.
  *
  * Profile selection MUST happen before any module reads `getAgentDir()` (notably
  * `@oh-my-pi/pi-utils/env`, which eagerly loads `.env` from the agent directory
@@ -56,11 +56,10 @@ function needsBoundaryAfterGlobalStrip(stripped: readonly string[]): boolean {
 export interface ProfileBootstrapResult {
 	argv: string[];
 	profile?: string;
-	aliasName?: string;
 }
 
 /**
- * Strip `--profile` / `--alias` from argv while preserving the surrounding
+ * Strip `--profile` from argv while preserving the surrounding
  * argument structure, returning the residual argv to hand to the launch parser
  * and the captured flag values.
  *
@@ -72,12 +71,11 @@ export interface ProfileBootstrapResult {
  * spellings of launch-shaped commands, so `omp launch --profile work` and
  * `omp acp --profile work` still select profile `work`.
  *
- * Throws when either flag is supplied without a value.
+ * Throws when the flag is supplied without a value.
  */
 export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapResult {
 	const stripped: string[] = [];
 	let profile: string | undefined;
-	let aliasName: string | undefined;
 	let passThrough = false;
 	let sawSubcommand = false;
 	let canDispatchSubcommand = true;
@@ -122,25 +120,6 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
-			continue;
-		}
-		if (arg === "--alias") {
-			const value = argv[index + 1];
-			if (!value || value.startsWith("-")) {
-				throw new Error("--alias requires a command name");
-			}
-			aliasName = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
-			index += 1;
-			continue;
-		}
-		if (arg.startsWith("--alias=")) {
-			const value = arg.slice("--alias=".length);
-			if (!value) {
-				throw new Error("--alias requires a command name");
-			}
-			aliasName = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
 			continue;
 		}
@@ -225,5 +204,5 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		stripped.push(arg);
 	}
 
-	return { argv: stripped, profile, aliasName };
+	return { argv: stripped, profile };
 }

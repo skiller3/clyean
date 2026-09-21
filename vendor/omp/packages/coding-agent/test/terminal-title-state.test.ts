@@ -12,9 +12,10 @@ import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { mockWindowsConsoleTitle, type WindowsConsoleTitleMock } from "./terminal-title-test-utils";
 
 const LABEL = "my-project";
-// The brand the title runtime prefixes every composed title with. Plain π —
-// window titles render in the OS UI font, so nerd-font glyphs are unusable here.
-const BRAND = "π";
+// The brand the title runtime prefixes every composed title with: the Clyean
+// soap-bar emoji, since window titles render in the OS UI font and nerd-font
+// glyphs are unusable there.
+const BRAND = "🧼";
 
 describe("buildTerminalTitleWithState", () => {
 	it("separates brand and label with '>' when idle/done (your turn)", () => {

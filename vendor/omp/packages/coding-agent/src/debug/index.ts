@@ -17,7 +17,7 @@ import {
 	type TerminalNotification,
 	Text,
 } from "@oh-my-pi/pi-tui";
-import { getSessionsDir } from "@oh-my-pi/pi-utils";
+import { getSessionsDir, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
 import { OverlayPanel } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -471,7 +471,7 @@ export class DebugSelectorComponent extends OverlayPanel {
 		if (!suppressed) {
 			const sessionName = this.ctx.sessionManager.getSessionName();
 			const notification: TerminalNotification = {
-				title: sessionName || "Oh My Pi",
+				title: sessionName || PRODUCT_NAME,
 				body: "Terminal protocol test",
 				type: "test",
 				actions: "focus",

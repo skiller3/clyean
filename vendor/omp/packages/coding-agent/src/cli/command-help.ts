@@ -1,13 +1,14 @@
 import type { CommandMetadata } from "@oh-my-pi/pi-utils/cli";
+import { CLI_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 
 export const acpHelp = {
-	description: "Run Oh My Pi as an ACP (Agent Client Protocol) server over stdio",
+	description: `Run ${PRODUCT_NAME} as an ACP (Agent Client Protocol) server over stdio`,
 } satisfies CommandMetadata;
 
 export const agentsHelp = { description: "Manage bundled task agents" } satisfies CommandMetadata;
 
 export const authBrokerHelp = {
-	description: "Manage the omp auth-broker (credential vault)",
+	description: `Manage the ${CLI_NAME} auth-broker (credential vault)`,
 } satisfies CommandMetadata;
 
 export const authGatewayHelp = {

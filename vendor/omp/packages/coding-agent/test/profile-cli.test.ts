@@ -6,17 +6,14 @@ import * as url from "node:url";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import {
 	__resetProfileSnapshotForTests,
-	APP_NAME,
 	getActiveProfile,
 	getAgentDbPath,
 	getAgentDir,
 	setAgentDir,
 	setProfile,
-	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { runCli } from "../src/cli";
-import * as profileAliasCli from "../src/cli/profile-alias";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 const cliEntry = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
@@ -127,82 +124,6 @@ describe("global --profile flag", () => {
 		expect(process.exitCode).toBe(0);
 		expect(getActiveProfile()).toBe("office");
 		expect(getAgentDir()).toBe(path.join(os.homedir(), configDir, "profiles", "office", "agent"));
-	});
-
-	it("installs a shell alias and exits before command dispatch", async () => {
-		const installSpy = vi.spyOn(profileAliasCli, "installProfileAlias").mockResolvedValue({
-			shell: "bash",
-			configPath: "/home/me/.bashrc",
-			aliasName: "omp-work",
-			profile: "work",
-			command: "omp --profile=work",
-			reloadedWith: ". '/home/me/.bashrc'",
-		});
-		const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-		await runCli(["--profile", "work", "--alias", "omp-work", "--version"]);
-
-		expect(process.exitCode).toBe(0);
-		expect(installSpy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				profile: "work",
-				aliasName: "omp-work",
-			}),
-		);
-		const output = outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n");
-		expect(output).toContain("Created omp-work");
-		expect(output).not.toContain(`${APP_NAME}/${VERSION}`);
-	});
-
-	it("installs a shell alias when launch is explicit", async () => {
-		const installSpy = vi.spyOn(profileAliasCli, "installProfileAlias").mockResolvedValue({
-			shell: "bash",
-			configPath: "/home/me/.bashrc",
-			aliasName: "omp-work",
-			profile: "work",
-			command: "omp --profile=work",
-			reloadedWith: ". '/home/me/.bashrc'",
-		});
-		const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-		await runCli(["launch", "--profile", "work", "--alias", "omp-work", "--version"]);
-
-		expect(process.exitCode).toBe(0);
-		expect(installSpy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				profile: "work",
-				aliasName: "omp-work",
-			}),
-		);
-		const output = outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n");
-		expect(output).toContain("Created omp-work");
-		expect(output).not.toContain(`${APP_NAME}/${VERSION}`);
-	});
-
-	it("installs a shell alias when acp is explicit", async () => {
-		const installSpy = vi.spyOn(profileAliasCli, "installProfileAlias").mockResolvedValue({
-			shell: "bash",
-			configPath: "/home/me/.bashrc",
-			aliasName: "omp-work",
-			profile: "work",
-			command: "omp --profile=work",
-			reloadedWith: ". '/home/me/.bashrc'",
-		});
-		const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-		await runCli(["acp", "--profile", "work", "--alias", "omp-work", "--version"]);
-
-		expect(process.exitCode).toBe(0);
-		expect(installSpy).toHaveBeenCalledWith(
-			expect.objectContaining({
-				profile: "work",
-				aliasName: "omp-work",
-			}),
-		);
-		expect(getActiveProfile()).toBe("work");
-		const output = outSpy.mock.calls.map(call => String(call[0] ?? "")).join("\n");
-		expect(output).toContain("Created omp-work");
-		expect(output).not.toContain(`${APP_NAME}/${VERSION}`);
 	});
 
 	it("rejects missing profile values without dispatching", async () => {

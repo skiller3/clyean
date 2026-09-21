@@ -13,7 +13,7 @@ import type {
 	TextGenerationStringOutput,
 	StoppingCriteria as TransformersStoppingCriteria,
 } from "@huggingface/transformers";
-import { getTinyModelsCacheDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
+import { CLI_NAME, getTinyModelsCacheDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
 import {
 	errorMessage,
 	errorText,
@@ -260,7 +260,7 @@ export async function startTinyWorkerFromEnvironment(): Promise<void> {
 	if (!isTinyLocalModelKey(modelKey)) throw new Error(`Unknown tiny local model: ${modelKey}`);
 	const spec = getTinyLocalModelSpec(modelKey);
 	if (!spec) throw new Error(`Unknown tiny local model: ${modelKey}`);
-	setProcessName(`omp tiny ${modelKey}`);
+	setProcessName(`${CLI_NAME} tiny ${modelKey}`);
 	const model = new OnnxModel(modelKey, spec, resolveTinyModelDevicePreference(), resolveTinyModelDtypeOverride());
 	const server = new TinyWorkerServer({
 		tag,

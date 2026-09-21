@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { agentScopeSuffix, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import {
 	formatModelString,
 	getModelMatchPreferences,
@@ -152,7 +153,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "security",
 		icon: "shield",
-		description: "Plan, run, inspect, import, and compare OMP-native security scans",
+		description: `Plan, run, inspect, import, and compare ${PRODUCT_NAME}-native security scans`,
 		allowArgs: true,
 		acpInputHint: "<plan|scan|status|cancel|scans|show|import|export|validate|compare|disposition>",
 		subcommands: [
@@ -164,7 +165,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "show", description: "Render a scan or security:// resource" },
 			{ name: "import", description: "Import SARIF or a Codex Security bundle" },
 			{ name: "export", description: "Export a canonical bundle, SARIF, or report" },
-			{ name: "validate", description: "Validate one finding with OMP-native tools" },
+			{ name: "validate", description: `Validate one finding with ${PRODUCT_NAME}-native tools` },
 			{ name: "compare", description: "Compare finding lineage across two scans" },
 			{ name: "disposition", description: "Set a finding disposition with rationale" },
 		],
@@ -325,11 +326,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "model",
 		aliases: ["models"],
 		icon: "model",
-		description: "Switch model for this session",
-		acpDescription: "Show current model selection",
+		description: `Switch model for this session${agentScopeSuffix()}`,
+		acpDescription: `Show current model selection${agentScopeSuffix()}`,
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
-			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
+			return `${model ? `Model: ${model.provider}/${model.id}` : "Model: none selected"}${agentScopeSuffix()}`;
 		},
 		handle: async (command, runtime) => {
 			if (command.args) {
@@ -345,7 +346,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					await runtime.session.setModel(match);
 					if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
-					await runtime.output(`Model set to ${match.provider}/${match.id}.`);
+					await runtime.output(`Model set to ${match.provider}/${match.id}${agentScopeSuffix()}.`);
 					await runtime.notifyTitleChanged?.();
 					await runtime.notifyConfigChanged?.();
 					return commandConsumed();
@@ -356,7 +357,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 
 			const model = runtime.session.model;
 			await runtime.output(
-				model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected.",
+				`${model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected"}${agentScopeSuffix()}.`,
 			);
 			return commandConsumed();
 		},
@@ -368,21 +369,21 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "switch",
 		icon: "swap",
-		description: "Switch model for this session (same as alt+p); accepts fuzzy ids, provider/id, @role, :level",
-		acpDescription: "Switch model for this session only",
+		description: `Switch model for this session (same as alt+p); accepts fuzzy ids, provider/id, @role, :level${agentScopeSuffix()}`,
+		acpDescription: `Switch model for this session only${agentScopeSuffix()}`,
 		acpInputHint: "[model]",
 		inlineHint: "[model]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.session.model;
-			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
+			return `${model ? `Model: ${model.provider}/${model.id}` : "Model: none selected"}${agentScopeSuffix()}`;
 		},
 		handle: async (command, runtime) => {
 			const selector = command.args.trim();
 			if (!selector) {
 				const model = runtime.session.model;
 				await runtime.output(
-					model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected.",
+					`${model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected"}${agentScopeSuffix()}.`,
 				);
 				return commandConsumed();
 			}
@@ -390,7 +391,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (!resolved.model) return usage(`Unknown model: ${selector}`, runtime);
 			try {
 				await runtime.session.setModelTemporary(resolved.model, resolved.thinkingLevel);
-				await runtime.output(`Session-only model: ${formatModelString(resolved.model)}.`);
+				await runtime.output(`Session-only model: ${formatModelString(resolved.model)}${agentScopeSuffix()}.`);
 				await runtime.notifyTitleChanged?.();
 				await runtime.notifyConfigChanged?.();
 				return commandConsumed();

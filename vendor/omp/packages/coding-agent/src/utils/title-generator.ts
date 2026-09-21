@@ -31,9 +31,10 @@ import { tinyTitleClient } from "../tiny/title-client";
 const TITLE_SYSTEM_PROMPT = prompt.render(titleSystemPrompt);
 const TITLE_MARKER_INSTRUCTION = prompt.render(titleMarkerInstruction);
 
-// Plain π, not the nerd-font `icon.omp` glyph: window/tab titles render in the
-// OS UI font, which has no nerd-font PUA coverage.
-const DEFAULT_TERMINAL_TITLE = "π";
+// The Clyean soap-bar mark as a plain emoji, not the nerd-font `icon.omp`
+// glyph: window/tab titles render in the OS UI font, which has no nerd-font
+// PUA coverage.
+const DEFAULT_TERMINAL_TITLE = "🧼";
 const TERMINAL_TITLE_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 /**
  * Emit a raw title escape sequence. While the TUI owns stdout its frames are

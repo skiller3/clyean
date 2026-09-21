@@ -596,7 +596,8 @@ describe("shareSession", () => {
 });
 
 describe("share command", () => {
-	test("rejects a missing path without creating or uploading a session", async () => {
+	// Clyean prunes the `share` subcommand from the command table (see cli-commands.ts).
+	test.skip("rejects a missing path without creating or uploading a session", async () => {
 		using tempDir = TempDir.createSync("@omp-share-missing-");
 		const sessionArg = "./ghost.jsonl";
 		const missingSession = path.join(tempDir.path(), "ghost.jsonl");

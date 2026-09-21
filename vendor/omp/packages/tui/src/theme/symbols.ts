@@ -458,7 +458,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.advisor": "👁",
 	"icon.advisorClosed": "🙈",
 	"icon.time": "⏱",
-	"icon.omp": "π",
+	"icon.omp": "🧼",
 	"icon.esc": "⎋",
 	"icon.ghost": "👻",
 	"icon.agents": "👥",
@@ -817,11 +817,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.advisorClosed": "\ueae7",
 	// pick:  | alt: ◷ ◴
 	"icon.time": "\uf017",
-	// pick: 󰵗 (nf-md-pi) | alt:  π ∏ ∑
-	// INTENTIONAL: U+F0D57 is the chosen glyph here. It has been "fixed" to
-	// U+F03FF before (2ec52b8bdd) and reverted because it renders the wrong glyph;
-	// do not swap it again.
-	"icon.omp": "\u{f0d57}",
+	// Clyean brand mark, pick: 󱕿 (nf-md-hand_wash). Nerd Fonts has no soap
+	// glyph; hand-washing is the closest "clean" icon. Must stay a private-use
+	// codepoint: the Glyph Protocol only registers PUA glyphs.
+	"icon.omp": "\u{f157f}",
 	// pick: 󱊷 (nf-md-keyboard_esc) | alt: ⎋
 	"icon.esc": "\u{f12b7}",
 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
@@ -1191,7 +1190,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.advisor": "(adv)",
 	"icon.advisorClosed": "(adv)",
 	"icon.time": "t:",
-	"icon.omp": "pi",
+	"icon.omp": "(o)",
 	"icon.esc": "esc",
 	"icon.ghost": "@",
 	"icon.agents": "AG",

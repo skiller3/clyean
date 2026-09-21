@@ -4,7 +4,7 @@
  * Handles `omp setup` for onboarding and `omp setup <component>` for optional dependencies.
  */
 import * as path from "node:path";
-import { APP_NAME, getProjectDir, getPythonEnvDir } from "@oh-my-pi/pi-utils";
+import { CLI_NAME, getProjectDir, getPythonEnvDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Settings } from "../config/settings";
 import { ModelRegistry } from "../config/model-registry";
@@ -42,7 +42,7 @@ export function parseSetupArgs(args: string[]): SetupCommandArgs | undefined {
 	}
 
 	if (args.length < 2) {
-		console.error(chalk.red(`Usage: ${APP_NAME} setup <component>`));
+		console.error(chalk.red(`Usage: ${CLI_NAME} setup <component>`));
 		console.error(`Valid components: ${VALID_COMPONENTS.join(", ")}`);
 		process.exit(1);
 	}
@@ -306,11 +306,11 @@ async function handleSpeechSetup(flags: { json?: boolean; check?: boolean }): Pr
  * Print setup command help.
  */
 export function printSetupHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} setup`)} - Run onboarding or install dependencies for optional features
+	console.log(`${chalk.bold(`${CLI_NAME} setup`)} - Run onboarding or install dependencies for optional features
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} setup                     Run the onboarding wizard
-  ${APP_NAME} setup <component> [options]
+  ${CLI_NAME} setup                     Run the onboarding wizard
+  ${CLI_NAME} setup <component> [options]
 
 ${chalk.bold("Components:")}
   python    Verify a Python 3 interpreter is reachable for code execution
@@ -321,10 +321,10 @@ ${chalk.bold("Options:")}
   --json        Output status as JSON
 
 ${chalk.bold("Examples:")}
-  ${APP_NAME} setup                  Run the onboarding wizard
-  ${APP_NAME} setup python           Check Python execution dependencies
-  ${APP_NAME} setup speech           Pick and download the STT and TTS models
-  ${APP_NAME} setup speech --check   Check if speech dependencies are available
-  ${APP_NAME} setup python --check   Check if Python execution is available
+  ${CLI_NAME} setup                  Run the onboarding wizard
+  ${CLI_NAME} setup python           Check Python execution dependencies
+  ${CLI_NAME} setup speech           Pick and download the STT and TTS models
+  ${CLI_NAME} setup speech --check   Check if speech dependencies are available
+  ${CLI_NAME} setup python --check   Check if Python execution is available
 `);
 }

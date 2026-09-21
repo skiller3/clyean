@@ -52,7 +52,8 @@ function createHarness() {
 	return { ctx, setText, showStatus, showError, runtime: { ctx } as BuiltinSlashCommandRuntime };
 }
 
-describe("/collab list slash command", () => {
+// Clyean prunes /collab from the builtin registry (see builtin-registry.ts).
+describe.skip("/collab list slash command", () => {
 	it("reports a bounded safe error and accepts another command after listing fails", async () => {
 		vi.spyOn(registry, "listCollabHosts").mockRejectedValue(new Error(`denied\n\x1b[2J${"x".repeat(1000)}`));
 		const harness = createHarness();

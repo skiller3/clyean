@@ -9,6 +9,7 @@
  * regression that motivated the split.
  */
 import type { CommandEntry } from "@oh-my-pi/pi-utils/cli";
+import { CLI_NAME } from "@oh-my-pi/pi-utils/dirs";
 import * as commandHelp from "./cli/command-help";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
@@ -53,41 +54,14 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.agentsHelp,
 	},
 	{
-		name: "bench",
-		load: () => import("./commands/bench").then(m => m.default),
-		help: commandHelp.benchHelp,
-	},
-	{
-		name: "browser-relay",
-		load: () => import("./commands/browser-relay").then(m => m.default),
-		help: commandHelp.browserRelayHelp,
-	},
-	{
 		name: "cleanse",
 		load: () => import("./commands/cleanse").then(m => m.default),
 		help: commandHelp.cleanseHelp,
 	},
 	{
-		name: "collab",
-		// Keep implementation imports behind the command boundary: this table is
-		// also imported before profile bootstrap and by native-free worker entries.
-		load: () => import("./commands/collab").then(m => m.default),
-		help: commandHelp.collabHelp,
-	},
-	{
 		name: "commit",
 		load: () => import("./commands/commit").then(m => m.default),
 		help: commandHelp.commitHelp,
-	},
-	{
-		name: "completions",
-		load: () => import("./commands/completions").then(m => m.default),
-		help: commandHelp.completionsHelp,
-	},
-	{
-		name: "__complete",
-		load: () => import("./commands/complete").then(m => m.default),
-		help: commandHelp.completeHelp,
 	},
 	{
 		name: "compress",
@@ -98,11 +72,6 @@ export const commands: CommandEntry[] = [
 		name: "config",
 		load: () => import("./commands/config").then(m => m.default),
 		help: commandHelp.configHelp,
-	},
-	{
-		name: "dry-balance",
-		load: () => import("./commands/dry-balance").then(m => m.default),
-		help: commandHelp.dryBalanceHelp,
 	},
 	{
 		name: "find",
@@ -120,19 +89,9 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.grepHelp,
 	},
 	{
-		name: "gallery",
-		load: () => import("./commands/gallery").then(m => m.default),
-		help: commandHelp.galleryHelp,
-	},
-	{
 		name: "git",
 		load: () => import("./commands/git").then(m => m.default),
 		help: commandHelp.gitHelp,
-	},
-	{
-		name: "grievances",
-		load: () => import("./commands/grievances").then(m => m.default),
-		help: commandHelp.grievancesHelp,
 	},
 	{
 		name: "images",
@@ -141,19 +100,9 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.imagesHelp,
 	},
 	{
-		name: "if-bench",
-		load: () => import("./commands/if-bench").then(m => m.default),
-		help: commandHelp.ifBenchHelp,
-	},
-	{
 		name: "install",
 		load: () => import("./commands/install").then(m => m.default),
 		help: commandHelp.installHelp,
-	},
-	{
-		name: "join",
-		load: () => import("./commands/join").then(m => m.default),
-		help: commandHelp.joinHelp,
 	},
 	{
 		name: "models",
@@ -172,16 +121,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.psHelp,
 	},
 	{
-		name: "say",
-		load: () => import("./commands/say").then(m => m.default),
-		help: commandHelp.sayHelp,
-	},
-	{
-		name: "share",
-		load: () => import("./commands/share").then(m => m.default),
-		help: commandHelp.shareHelp,
-	},
-	{
 		name: "setup",
 		load: () => import("./commands/setup").then(m => m.default),
 		help: commandHelp.setupHelp,
@@ -197,11 +136,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.readHelp,
 	},
 	{
-		name: "render",
-		load: () => import("./commands/render").then(m => m.default),
-		help: commandHelp.renderHelp,
-	},
-	{
 		name: "ssh",
 		load: () => import("./commands/ssh").then(m => m.default),
 		help: commandHelp.sshHelp,
@@ -210,16 +144,6 @@ export const commands: CommandEntry[] = [
 		name: "stats",
 		load: () => import("./commands/stats").then(m => m.default),
 		help: commandHelp.statsHelp,
-	},
-	{
-		name: "stream",
-		load: () => import("./commands/stream").then(m => m.default),
-		help: commandHelp.streamHelp,
-	},
-	{
-		name: "update",
-		load: () => import("./commands/update").then(m => m.default),
-		help: commandHelp.updateHelp,
 	},
 	{
 		name: "usage",
@@ -240,12 +164,6 @@ export const commands: CommandEntry[] = [
 		name: "ttsr",
 		load: () => import("./commands/ttsr").then(m => m.default),
 		help: commandHelp.ttsrHelp,
-	},
-	{
-		name: "worktree",
-		load: () => import("./commands/worktree").then(m => m.default),
-		aliases: ["wt"],
-		help: commandHelp.worktreeHelp,
 	},
 	{
 		name: "search",
@@ -281,23 +199,15 @@ export function isSubcommand(first: string | undefined): boolean {
 // a hint pointing there. See {@link reservedTopLevelWordMessage} for when a hint
 // fires vs. when the argv still falls through to `launch`.
 const RESERVED_TOP_LEVEL_WORDS: Record<string, string> = {
-	extensions:
-		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
-	list: '`omp list` is not a top-level command. Use `omp plugin list` to list installed plugins, or run `omp launch list` if you meant to send "list" as a prompt.',
-	remove:
-		'`omp remove` is not a top-level command. Use `omp plugin uninstall <name>` to remove a plugin, or run `omp launch remove` if you meant to send "remove" as a prompt.',
-	uninstall:
-		'`omp uninstall` is not a top-level command. Use `omp plugin uninstall <name@marketplace>` to remove a plugin, or run `omp launch uninstall` if you meant to send "uninstall" as a prompt.',
-	marketplace:
-		'`omp marketplace` is not a top-level command. Use `omp plugin marketplace <add|remove|update|list>` to manage marketplaces, or run `omp launch marketplace` if you meant to send "marketplace" as a prompt.',
-	discover:
-		'`omp discover` is not a top-level command. Use `omp plugin discover [marketplace]` to browse available plugins, or run `omp launch discover` if you meant to send "discover" as a prompt.',
-	upgrade:
-		'`omp upgrade` is not a top-level command. Use `omp plugin upgrade [name@marketplace]` to upgrade plugins, or run `omp launch upgrade` if you meant to send "upgrade" as a prompt.',
-	enable:
-		'`omp enable` is not a top-level command. Use `omp plugin enable <name@marketplace>` to enable a plugin, or run `omp launch enable` if you meant to send "enable" as a prompt.',
-	disable:
-		'`omp disable` is not a top-level command. Use `omp plugin disable <name@marketplace>` to disable a plugin, or run `omp launch disable` if you meant to send "disable" as a prompt.',
+	extensions: `\`${CLI_NAME} extensions\` is not a management command. Use \`${CLI_NAME} plugin list\` / \`${CLI_NAME} plugin install\`, or run \`${CLI_NAME} launch extensions\` if you meant to send "extensions" as a prompt.`,
+	list: `\`${CLI_NAME} list\` is not a top-level command. Use \`${CLI_NAME} plugin list\` to list installed plugins, or run \`${CLI_NAME} launch list\` if you meant to send "list" as a prompt.`,
+	remove: `\`${CLI_NAME} remove\` is not a top-level command. Use \`${CLI_NAME} plugin uninstall <name>\` to remove a plugin, or run \`${CLI_NAME} launch remove\` if you meant to send "remove" as a prompt.`,
+	uninstall: `\`${CLI_NAME} uninstall\` is not a top-level command. Use \`${CLI_NAME} plugin uninstall <name@marketplace>\` to remove a plugin, or run \`${CLI_NAME} launch uninstall\` if you meant to send "uninstall" as a prompt.`,
+	marketplace: `\`${CLI_NAME} marketplace\` is not a top-level command. Use \`${CLI_NAME} plugin marketplace <add|remove|update|list>\` to manage marketplaces, or run \`${CLI_NAME} launch marketplace\` if you meant to send "marketplace" as a prompt.`,
+	discover: `\`${CLI_NAME} discover\` is not a top-level command. Use \`${CLI_NAME} plugin discover [marketplace]\` to browse available plugins, or run \`${CLI_NAME} launch discover\` if you meant to send "discover" as a prompt.`,
+	upgrade: `\`${CLI_NAME} upgrade\` is not a top-level command. Use \`${CLI_NAME} plugin upgrade [name@marketplace]\` to upgrade plugins, or run \`${CLI_NAME} launch upgrade\` if you meant to send "upgrade" as a prompt.`,
+	enable: `\`${CLI_NAME} enable\` is not a top-level command. Use \`${CLI_NAME} plugin enable <name@marketplace>\` to enable a plugin, or run \`${CLI_NAME} launch enable\` if you meant to send "enable" as a prompt.`,
+	disable: `\`${CLI_NAME} disable\` is not a top-level command. Use \`${CLI_NAME} plugin disable <name@marketplace>\` to disable a plugin, or run \`${CLI_NAME} launch disable\` if you meant to send "disable" as a prompt.`,
 };
 
 // Sub-actions that make `omp marketplace <sub>` unambiguously a management

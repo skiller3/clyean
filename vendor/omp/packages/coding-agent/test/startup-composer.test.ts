@@ -633,7 +633,7 @@ describe("Composer prepaint", () => {
 			.map(r => Bun.stripANSI(r))
 			.join("\n");
 		expect(output).toContain("Welcome back!");
-		expect(output).toContain("omp");
+		expect(output).toContain("clyean");
 		expect(output).toContain("9.9.9");
 		expect(output).toContain("prior work");
 		expect(output).not.toContain("Starting OMP");

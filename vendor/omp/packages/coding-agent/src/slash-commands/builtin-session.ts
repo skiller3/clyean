@@ -1,4 +1,5 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { agentScopeSuffix, getClyeanAgent } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import type { SessionOAuthAccountList } from "../session/agent-session-types";
 import {
@@ -512,13 +513,13 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "login",
 		icon: "signIn",
-		description: "Login with OAuth provider",
+		description: `Login with OAuth provider${agentScopeSuffix()}`,
 		inlineHint: "[provider|redirect URL]",
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.oauthManualInput.hasPending()
-				? `Login: waiting for ${runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth"} callback`
-				: "Login: choose provider",
+				? `Login: waiting for ${runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth"} callback${agentScopeSuffix()}`
+				: `Login: choose provider${agentScopeSuffix()}`,
 		handleTui: (command, runtime) => {
 			const manualInput = runtime.ctx.oauthManualInput;
 			const args = command.args.trim();
@@ -565,7 +566,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "logout",
 		icon: "signOut",
-		description: "Logout from OAuth provider",
+		description: `Logout from OAuth provider${agentScopeSuffix()}`,
 		inlineHint: "[provider]",
 		allowArgs: true,
 		handleTui: (command, runtime) => {
@@ -588,17 +589,21 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "mcp",
 		icon: "mcp",
-		description: "Manage MCP servers (add, list, remove, test)",
-		acpDescription: "Manage MCP servers",
+		description: `Manage MCP servers (add, list, remove, test)${agentScopeSuffix()}`,
+		acpDescription: `Manage MCP servers${agentScopeSuffix()}`,
 		inlineHint: "<subcommand>",
 		subcommands: [
 			{
 				name: "add",
 				description: "Add a new MCP server",
-				usage: "<name> [--scope project|user] [--url <url>] [-- <command...>]",
+				usage: `<name> [--scope project|user${getClyeanAgent() ? " (user = this agent)" : ""}] [--url <url>] [-- <command...>]`,
 			},
 			{ name: "list", description: "List all configured MCP servers" },
-			{ name: "remove", description: "Remove an MCP server", usage: "<name> [--scope project|user]" },
+			{
+				name: "remove",
+				description: "Remove an MCP server",
+				usage: `<name> [--scope project|user${getClyeanAgent() ? " (user = this agent)" : ""}]`,
+			},
 			{ name: "test", description: "Test connection to a server", usage: "<name>" },
 			{ name: "reauth", description: "Reauthorize OAuth for a server", usage: "<name>" },
 			{ name: "unauth", description: "Remove OAuth auth from a server", usage: "<name>" },

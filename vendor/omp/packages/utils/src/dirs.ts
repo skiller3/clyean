@@ -20,6 +20,21 @@ import { isEnoent, isEnotdir } from "./fs-error";
 /** App name (e.g. "omp") */
 export const APP_NAME: string = "omp";
 
+/**
+ * Clyean rebrand of the contained harness. `PRODUCT_NAME` and `CLI_NAME` are
+ * what the user reads (TUI text, help, notifications, process name).
+ * `APP_NAME` and `CONFIG_DIR_NAME` stay "omp"/".omp" on purpose: they name
+ * on-disk paths, log files, environment variables, and user agents that the
+ * Clyean specification keeps compatible with upstream.
+ */
+export const PRODUCT_NAME: string = "Clyean";
+
+/** Command name shown in help text and usage examples. */
+export const CLI_NAME: string = "clyean";
+
+/** Attribution line the welcome screen shows for the contained harness. */
+export const HARNESS_ATTRIBUTION: string = "Clyean uses the fabulous Oh-My-Pi (https://omp.sh/) harness!";
+
 /** Config directory name (e.g. ".omp") */
 export const CONFIG_DIR_NAME: string = ".omp";
 

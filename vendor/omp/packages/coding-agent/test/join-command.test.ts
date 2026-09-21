@@ -6,7 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import { isSubcommand, resolveCliArgv } from "@oh-my-pi/pi-coding-agent/cli-commands";
 
-describe("join command is registered as a top-level subcommand", () => {
+// Clyean prunes the `join` subcommand from the command table (see cli-commands.ts).
+describe.skip("join command is registered as a top-level subcommand", () => {
 	test("CLI runner routes `join <link>` to the join command, not launch", () => {
 		expect(isSubcommand("join")).toBe(true);
 		expect(resolveCliArgv(["join", "wss://my.omp.sh/s/abc#key"])).toEqual({

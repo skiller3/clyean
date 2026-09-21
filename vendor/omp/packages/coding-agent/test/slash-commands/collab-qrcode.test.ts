@@ -93,7 +93,8 @@ function mockStartedHostLinks(
 	});
 }
 
-describe("/collab slash command QR code rendering", () => {
+// Clyean prunes /collab from the builtin registry (see builtin-registry.ts).
+describe.skip("/collab slash command QR code rendering", () => {
 	it("status preserves a view-only room's published access", async () => {
 		const harness = await createRuntimeHarness({ collabHost: fakeHost({ access: "view" }) });
 		await executeBuiltinSlashCommand("/collab status", harness.runtime);

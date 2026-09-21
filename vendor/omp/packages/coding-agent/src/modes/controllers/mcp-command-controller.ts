@@ -5,7 +5,7 @@
  */
 import * as path from "node:path";
 import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getClyeanAgent, getMCPConfigPath, getProjectDir, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { clearCache as clearFsCache } from "../../capability/fs";
 import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
@@ -493,6 +493,14 @@ export class MCPCommandController {
 			"  /mcp notifications    Show notification capabilities and subscription state",
 			"  /mcp help             Show this help message",
 			"",
+			...(getClyeanAgent()
+				? [
+						theme.fg("accent", "Scopes:"),
+						`  project               Shared by every Clyean agent of this project (.omp/mcp.json)`,
+						`  user                  Only the ${getClyeanAgent()} agent (its own harness profile)`,
+						"",
+					]
+				: []),
 		].join("\n");
 
 		this.#showMessage(helpText);
@@ -1222,8 +1230,8 @@ export class MCPCommandController {
 			const usesMcpRemote = [config.command, ...(config.args ?? [])].some(part => part?.includes("mcp-remote"));
 			throw new Error(
 				usesMcpRemote
-					? `this server proxies OAuth through mcp-remote, which caches tokens machine-wide in ~/.mcp-auth (shared across every OMP profile). Clear ~/.mcp-auth to force a fresh login, or replace the proxy with ${httpHint} so OMP manages OAuth per profile.`
-					: `stdio servers manage their own credentials, so OMP has no OAuth to reauthorize. If the service supports OAuth over HTTP, configure it as ${httpHint} instead.`,
+					? `this server proxies OAuth through mcp-remote, which caches tokens machine-wide in ~/.mcp-auth (shared across every ${PRODUCT_NAME} profile). Clear ~/.mcp-auth to force a fresh login, or replace the proxy with ${httpHint} so ${PRODUCT_NAME} manages OAuth per profile.`
+					: `stdio servers manage their own credentials, so ${PRODUCT_NAME} has no OAuth to reauthorize. If the service supports OAuth over HTTP, configure it as ${httpHint} instead.`,
 			);
 		}
 		// First test if server actually needs auth by connecting without OAuth
