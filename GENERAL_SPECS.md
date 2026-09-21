@@ -72,7 +72,7 @@ Clyean's sandboxing behavior should be enforced as follows:
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
 
-Clyean *contains* a fork of `omp` and sits above it: Clyean's own code is an orchestration layer that coordinates communication between multiple agents, each of which runs independently on the contained harness.  The rebranding, option-pruning, and per-agent scoping requirements in the "Basic User Experience" section describe changes to the contained harness; the user is expected to interact with a "User Assistant" agent via `podman exec -it`.
+Clyean *contains* a fork of `omp` and sits above it: Clyean's own code is an orchestration layer that coordinates communication between multiple agents, each of which runs independently on the contained harness.  The rebranding, option-pruning, and per-agent scoping requirements in the "Basic User Experience" section describe changes to the contained harness; the user interacts with a "User Assistant" agent through the terminal that `clyean` attaches to that agent's container (`podman start --attach` on first launch, `podman attach` afterwards); additional sessions in the same container are opened with `podman exec -it`.
 
 The `omp` fork is vendored into this repository at `vendor/omp` as a squashed `git subtree`, tracked against the `upstream` remote (`https://github.com/can1357/oh-my-pi`, push disabled).  Upstream changes are taken with `git subtree pull --prefix=vendor/omp upstream main --squash`.  Upstream tags are deliberately not fetched so they cannot collide with Clyean's own semantic version tags.  Modifications to the harness are made in place under `vendor/omp` and should be kept as narrow and as well isolated as practical, since every additional point of divergence is a conflict to resolve on each upstream pull.  Every divergence is recorded in `vendor/omp/CLYEAN-MODIFICATIONS.md`, which each upstream pull re-applies and re-verifies.
 
@@ -156,7 +156,7 @@ The following pieces of the contained harness are the integration contract that 
 
 - The User Assistant agent is the sole reporter of agent state, session identity, and pane metadata.  Every other Clyean agent must stay silent on the Herdr socket for these purposes.
 - Silence must be enforced by two independent gates: the harness root-session check (`ctx.hasUI === true`) and Clyean's own agent-role identity.
-- This is required because all of a project's agents share the single pane the user attaches to with `podman exec -it`.  Multiple reporters would contend for one pane's status and produce misleading sidebar state.
+- This is required because all of a project's agents share the single pane the user's terminal is attached to (through `podman start --attach`, `podman attach`, or `podman exec -it`).  Multiple reporters would contend for one pane's status and produce misleading sidebar state.
 - Because the User Assistant coordinates the other agents, Clyean must surface orchestration-level waiting through the same channel.  When the User Assistant is awaiting the user for something that is neither a tool approval nor an `ask` question (a specification or plan review, for example), Clyean must emit `herdr:blocked` on the custom event bus with a human-readable label, and clear it when the wait is satisfied.
 
 ## Session identity

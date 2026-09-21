@@ -114,10 +114,21 @@ pub fn harness_asset_name(arch_tag: &str) -> String {
 }
 
 pub fn harness_release_url(clyean_version: &str, arch_tag: &str) -> String {
-    format!(
-        "https://github.com/{RELEASE_REPOSITORY}/releases/download/v{clyean_version}/{}",
-        harness_asset_name(arch_tag)
-    )
+    release_asset_url(clyean_version, &harness_asset_name(arch_tag))
+}
+
+pub fn release_asset_url(clyean_version: &str, asset: &str) -> String {
+    format!("https://github.com/{RELEASE_REPOSITORY}/releases/download/v{clyean_version}/{asset}")
+}
+
+/// Finds the SHA-256 digest recorded for `asset` in a `SHA256SUMS` file (`<hex>  <name>`).
+pub fn digest_from_checksums(checksums: &str, asset: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let digest = parts.next()?;
+        let name = parts.next()?.trim_start_matches('*');
+        (name == asset && digest.len() == 64).then(|| digest.to_ascii_lowercase())
+    })
 }
 
 /// Resolves the harness binary in order: environment override, project configuration,
@@ -145,8 +156,25 @@ pub async fn resolve_harness_binary(
         .join(clyean_version)
         .join(harness_asset_name(arch_tag));
     if !cached.is_file() {
+        let asset = harness_asset_name(arch_tag);
+        let checksums_url = release_asset_url(clyean_version, "SHA256SUMS");
+        let checksums = download_text(&checksums_url).await?;
+        let expected =
+            digest_from_checksums(&checksums, &asset).ok_or_else(|| SandboxError::Download {
+                url: checksums_url.clone(),
+                reason: format!("SHA256SUMS has no entry for {asset}"),
+            })?;
         let url = harness_release_url(clyean_version, arch_tag);
         download_to(&url, &cached).await?;
+        let actual = sha256_of(&cached)?;
+        if actual != expected {
+            let _ = std::fs::remove_file(&cached);
+            return Err(SandboxError::Checksum {
+                file: asset,
+                expected,
+                actual,
+            });
+        }
         set_executable(&cached)?;
     }
     Ok(HarnessBinary {
@@ -194,6 +222,25 @@ pub async fn ensure_plantuml_jar(cache_dir: &Path) -> Result<PathBuf> {
         });
     }
     Ok(target)
+}
+
+async fn download_text(url: &str) -> Result<String> {
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| SandboxError::Download {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+    if !response.status().is_success() {
+        return Err(SandboxError::Download {
+            url: url.to_string(),
+            reason: format!("HTTP {}", response.status()),
+        });
+    }
+    response.text().await.map_err(|e| SandboxError::Download {
+        url: url.to_string(),
+        reason: e.to_string(),
+    })
 }
 
 async fn download_to(url: &str, target: &Path) -> Result<()> {
@@ -361,8 +408,23 @@ mod tests {
     }
 
     #[test]
+    fn checksum_files_are_parsed_per_asset() {
+        let checksums = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ABCDEF  clyean-harness-linux-x64\nfeedface00000000000000000000000000000000000000000000000000000000 *clyean-linux-x64\n";
+        assert_eq!(
+            digest_from_checksums(checksums, "clyean-harness-linux-x64").as_deref(),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            digest_from_checksums(checksums, "clyean-linux-x64").as_deref(),
+            Some("feedface00000000000000000000000000000000000000000000000000000000")
+        );
+        assert!(digest_from_checksums(checksums, "missing").is_none());
+    }
+
+    #[test]
     fn release_url_and_asset_names_follow_the_contract() {
         assert_eq!(harness_asset_name("arm64"), "clyean-harness-linux-arm64");
+        assert!(release_asset_url("0.2.0", "SHA256SUMS").ends_with("/v0.2.0/SHA256SUMS"));
         assert_eq!(
             harness_release_url("0.2.0", "x64"),
             "https://github.com/skiller3/clyean/releases/download/v0.2.0/clyean-harness-linux-x64"
