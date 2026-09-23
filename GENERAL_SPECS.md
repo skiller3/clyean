@@ -11,12 +11,29 @@ From a UX perspective, `clyean` is primarily a CLI program that launches a termi
 IMPORTANT: When the user passes prompts to the Clyean CLI/TUI, they should be directly interacting with the "User Assistant" agent, which is itself one of several agents specified in this file's "Agents" section.
 
 
+# Supported Platforms
+Clyean supports the following operating systems, each on both the x86-64 and ARM64 (AArch64) processor architectures.  No other architectures are supported.
+
+| Operating system | Installer | Where Podman runs agent containers |
+| --- | --- | --- |
+| Linux | `install.sh` | On the host's kernel, rootless |
+| Linux on WSL (a Linux distribution running under WSL 2) | `install.sh`, run inside the distribution | On the distribution's kernel, rootless |
+| Native Windows | `install.ps1` | In a Linux virtual machine managed by `podman machine` |
+| macOS | `install.sh` | In a Linux virtual machine managed by `podman machine` |
+
+Supported means that every requirement in this document and in `AGENT_SPECS.md` holds on each of the eight combinations of operating system and architecture.
+
+Several requirements name a mechanism that exists only where Podman runs agent containers on the same kernel as the `clyean` process, such as a Unix domain socket bind-mounted into a container, Podman's user namespace on the host, or a host directory used directly as a container's root filesystem.  Each such requirement is a requirement for the capability the mechanism provides.  On native Windows and macOS, Clyean must provide the same capability, with the same security properties, by whatever means the Podman machine allows.
+
+The contained harness always runs inside a Linux container, so the `clyean-harness-linux-x64` and `clyean-harness-linux-arm64` builds serve every supported platform, selected by the architecture of the kernel that runs the containers.
+
+
 # Installation
 Users are expected to install the latest release (or any specific release via a passed release version argument) via one of two scripts:
-- `install.sh` - Bourne script expected to be used for installation within Linux and MacOS environments, often via a command like `curl -fsSL https://clyean.com/install.sh | sh`.
+- `install.sh` - Bourne script expected to be used for installation within Linux (including Linux distributions running under WSL) and MacOS environments, often via a command like `curl -fsSL https://clyean.com/install.sh | sh`.
 - `install.ps1` - PowerShell script expected to be used within Windows environments (outside of WSL), often via a command like `irm https://clyean.com/install.ps1 | iex`.
 
-The preceding scripts are expected to install any necessary required dependencies (e.g. Podman), and broadly comply with software installation norms for their respective OS environments (for example, the `clyean` executable should be installed by default within `/home/<user>/.local/bin/` within Ubuntu Linux environments).  When in doubt about correct design and behavior of these scripts, please mirror the design and behavior of `omp`'s installation scripts at `https://omp.sh/install` and `https://omp.sh/install.ps1`.
+The preceding scripts are expected to install any necessary required dependencies (e.g. Podman), and broadly comply with software installation norms for their respective OS environments (for example, the `clyean` executable should be installed by default within `/home/<user>/.local/bin/` within Ubuntu Linux environments).  On native Windows and macOS, the required dependencies include an initialized and running Podman machine.  When in doubt about correct design and behavior of these scripts, please mirror the design and behavior of `omp`'s installation scripts at `https://omp.sh/install` and `https://omp.sh/install.ps1`.
 
 Both scripts install the prebuilt `clyean` executable published as a GitHub release asset named `clyean-<platform>-<arch>` (`linux`, `darwin`, or `windows`; `x64` or `arm64`; `.exe` on Windows), verify it against the release's `SHA256SUMS`, and smoke-test it with `clyean --version` before reporting success.  Both accept a release tag (`--ref`/`-Ref`), a source build via `cargo install` (`--source`/`-Source`), and an opt-out of dependency installation (`--no-deps`/`-NoDeps`).  They never prompt, because their standard input is the download pipe.
 
@@ -170,7 +187,7 @@ The following pieces of the contained harness are the integration contract that 
 - Propagate `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, and `HERDR_SOCKET_PATH` into the User Assistant agent's container.
 - Resolve the host socket from `HERDR_SOCKET_PATH` rather than assuming the default location, because named Herdr sessions place their socket under `~/.config/herdr/sessions/<name>/`.
 - Bind-mount the resolved host socket into the container with read-write access, and rewrite `HERDR_SOCKET_PATH` in the container environment to the in-container mount path.
-- **This mount is an explicit exception to the "Sandboxing, Workspaces & Mounts" section.**  The User Assistant agent is granted the full Herdr socket API, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, and `agent.start`) and control of panes that do not belong to the project.  Clyean interacts with Herdr in a manner identical to `omp`, so the socket must not be filtered, proxied, or otherwise reduced.  Alongside the Product Director agent's remote repository access, this is a sanctioned route out of the sandbox and must be documented as such for users.
+- **This mount is an explicit exception to the "Sandboxing, Workspaces & Mounts" section.**  The User Assistant agent is granted the full Herdr socket API, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, and `agent.start`) and control of panes that do not belong to the project.  Clyean interacts with Herdr in a manner identical to `omp`, so the socket must not be filtered or otherwise reduced.  Where a platform requires relaying the socket to reach the container, the relay must pass every request and response through unmodified.  Alongside the Product Director agent's remote repository access, this is a sanctioned route out of the sandbox and must be documented as such for users.
 - When the `herdr` executable is present on the host, mount it read-only into the container and propagate `HERDR_BIN_PATH`, so that User Assistant tooling which shells out to the Herdr CLI works as it does under `omp`.  Its absence must not be an error.
 
 ## Pane presentation
