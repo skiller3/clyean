@@ -1,0 +1,5 @@
+# `cargo build-bin` installs the clyean executable for the host OS and
+# architecture at bin/clyean. --force is required because cargo install
+# refuses to overwrite a binary whose crate version has not changed.
+[alias]
+build-bin = "install --path crates/clyean --root . --locked --force"
