@@ -6,7 +6,7 @@ From a UX perspective, `clyean` is primarily a CLI program that launches a termi
   - `omp` commandline arguments/options that are non-coherent given Clyean's goals or complicated to implement due to its architecture should be eliminated.
   - `omp` TUI configuration, options, commands (including slash commands), and overall functionality that is non-coherent given the Clyean's goals or complicated to implement given its architecture should be eliminated.
   - MCP (`/mcp`) commands and server connections should be supported with the enhancement of generally being scoped to particular agents (it shouldn't be assumed that all agents that coordinate to perform a unit of work should have access to the same MCP servers).
-  - Model (`/model`) and switch (`/switch`) commands need to be adjusted to ensure model connections, authentication mechanisms, and usage parameters are scoped to specific agents.
+  - Model (`/model`) and switch (`/switch`) commands need to be adjusted to ensure model connections, authentication mechanisms, and usage parameters are scoped to specific agents (see "Credentials & Secrets").
 
 IMPORTANT: When the user passes prompts to the Clyean CLI/TUI, they should be directly interacting with the "User Assistant" agent, which is itself one of several agents specified in this file's "Agents" section.
 
@@ -68,6 +68,17 @@ Clyean's sandboxing behavior should be enforced as follows:
 - By default, all agents should be instructed to never modify file system content outside of the project directory unless directly and explicitly instructed to do so.
 - With the exception of the "Product Director" agent being capable of pushing changes to remote repositories and issuing pull requests, all agents should be instructed by default to never modify the state of any connected system (via MCP, API, UI, or otherwise) unless directly and explicitly instructed to do so. 
 - As a further exception, the "User Assistant" agent is granted the full Herdr socket API when Clyean runs inside a Herdr pane, which lets it mutate the user's terminal workspace outside the project.  See the "Herdr Compatibility" section for the required socket mount and the capabilities it grants.
+
+
+# Credentials & Secrets
+Every agent has its own login store: the harness credential store in that agent's own harness profile (`~/.omp/profiles/<agent-id>`), which holds the provider sign-ins, API keys, and MCP server credentials the agent authenticates with.  Agents authenticate only from their own login stores and from the secrets Clyean passes to them.  Clyean never connects agents to a shared credential store or credential service, such as the harness's auth broker.
+
+- The user signs in through the User Assistant (for example with `/login`), and every sign-in is recorded in the User Assistant's login store.  That includes sign-ins that only other agents need, such as one for an MCP server configured only for another agent.
+- When any other agent starts, and before it sends any request, Clyean copies into that agent's login store the credentials it needs, and only those: the credentials for the providers of the models it is configured to use and for the MCP servers configured for it.  The copies replace the ones the agent held before, so a sign-out through the User Assistant reaches every agent no later than its next start.
+- A copy lets an agent use a credential but not refresh it.  Sign-ins are refreshed only in the User Assistant's login store, and Clyean renews each copy from that store before the copy expires, including while the agent is working, so that no agent can invalidate a credential another agent holds.
+- Clyean copies credentials through the harness's own credential interfaces, never by copying a store's files, so that every copy is a consistent snapshot.
+- Each agent's containers expose that agent's own login store and no other agent's.  This is an explicit exception to the shared file system described in the "Sandboxing, Workspaces & Mounts" section.
+- Secrets from the host reach only the agents that need them.  Provider API keys and cloud credentials in the host environment pass to the User Assistant, whose model the user chooses while working, and to each other agent only for the providers of the models it is configured to use.  Further variables that the project passes through reach only the agents the project configuration assigns them to, such as a repository token for the Product Director alone.
 
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
