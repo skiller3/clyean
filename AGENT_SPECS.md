@@ -53,9 +53,9 @@ The User Assistant delegates through tools registered by a Clyean-managed harnes
 Responsible for establishing Clyean project scaffold materials based on deterministic logic when possible, as well as deep agentic research about the project.  Among potentially other work, the scaffolder must:
 
 - Initialize Git repo (`.git` directory) if it doesn't exist.
-- Ensure Git ignores the scaffold content that must stay out of version control, namely the `.clyean/container-root` directory and the local-only `*.local.<ext>` enhancements and overrides.  Determine whether a path is already ignored by consulting Git's effective ignore rules (e.g. `git check-ignore`) rather than by text-matching `.gitignore` files, so that a rule the user has already placed anywhere in the repository is honored rather than duplicated.  Write any missing rule to `.clyean/.gitignore`, keeping Clyean's exclusions out of a `.gitignore` the user maintains.
+- Ensure Git ignores the scaffold content that must stay out of version control, namely the local-only `*.local.<ext>` files, which hold the user's local enhancements and overrides and the project's sandbox identifier (`.clyean/sandbox.local.json`).  Determine whether a path is already ignored by consulting Git's effective ignore rules (e.g. `git check-ignore`) rather than by text-matching `.gitignore` files, so that a rule the user has already placed anywhere in the repository is honored rather than duplicated.  Write any missing rule to `.clyean/.gitignore`, keeping Clyean's exclusions out of a `.gitignore` the user maintains.
 - Establish project and agent-level configurations and instructions (i.e. the `.clyean/project.json` file and `.clyean/agents` directory content).
-- Setup `.clyean/container-root` and the Clyean agent Podman sandbox.
+- Set up the project's sandbox root filesystem and the Clyean agent Podman sandbox.
 - Deeply research the project and author its specifications (i.e. `.clyean/SPECS.md`).  The generated materials should reflect the project's status quo, not any future ideal state.
 - Deeply research the project and author its current architecture (`.clyean/architecture` directory content).  The generated materials should reflect the project's status quo, not any future ideal state.
 
