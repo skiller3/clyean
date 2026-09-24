@@ -5,7 +5,9 @@
 //! the same newline-delimited JSON protocol: a ready frame, protocol negotiation, and a
 //! scripted agent turn for every `prompt` command.  A prompt containing the marker
 //! `REPLY:` is answered with the text after the marker; any other prompt is echoed.
-//! A prompt containing `CHUNKED` answers through protocol v2 chunk frames.
+//! A prompt containing `CHUNKED` answers through protocol v2 chunk frames.  A prompt
+//! containing `ASK:` first sends an extension UI input request whose placeholder is the
+//! text after the marker, and answers with the value it receives.
 
 use std::io::{BufRead, Write};
 
@@ -25,6 +27,7 @@ fn main() {
         }),
     );
     let mut chunked_allowed = false;
+    let mut awaiting_answer = false;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -52,7 +55,21 @@ fn main() {
                     &mut stdout,
                     &json!({"id": id, "type": "response", "command": "prompt", "success": true, "data": {"agentInvoked": true}}),
                 );
-                scripted_turn(&mut stdout, &message, chunked_allowed);
+                match message.split_once("ASK:") {
+                    Some((_, question)) => {
+                        emit(
+                            &mut stdout,
+                            &json!({"type": "extension_ui_request", "id": "ui-1", "method": "input", "title": "clyean:credentials", "placeholder": question.trim(), "timeout": 60000}),
+                        );
+                        awaiting_answer = true;
+                    }
+                    None => scripted_turn(&mut stdout, &message, chunked_allowed),
+                }
+            }
+            "extension_ui_response" if awaiting_answer && id == "ui-1" => {
+                awaiting_answer = false;
+                let answer = command["value"].as_str().unwrap_or("<cancelled>");
+                scripted_turn(&mut stdout, &format!("REPLY: {answer}"), chunked_allowed);
             }
             "get_state" => emit(
                 &mut stdout,

@@ -1,9 +1,14 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession, TurnProgress};
+use clyean_harness::session::BoxFuture;
+use clyean_harness::{
+    AgentSessionDriver, HarnessClient, HarnessSession, RpcFrame, TurnProgress, UiRequestHandler,
+};
+use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -64,5 +69,34 @@ async fn failed_commands_surface_as_errors() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("scripted failure"));
+    session.shutdown().await.unwrap();
+}
+
+struct Renewals;
+
+impl UiRequestHandler for Renewals {
+    fn answer<'a>(&'a self, request: &'a RpcFrame) -> BoxFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            (request.0["title"] == "clyean:credentials").then(|| {
+                json!({"value": format!("renewed {}", request.0["placeholder"].as_str().unwrap_or_default())})
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn ui_requests_are_answered_by_the_handler_during_a_turn() {
+    let command = Command::new(env!("CARGO_BIN_EXE_clyean-fake-harness"));
+    let client = HarnessClient::spawn_with_ui_handler(
+        command,
+        Duration::from_secs(10),
+        Some(Arc::new(Renewals)),
+    )
+    .await
+    .unwrap();
+    let session = HarnessSession::new(client, Duration::from_secs(30));
+    let (tx, _rx) = mpsc::channel(64);
+    let outcome = session.prompt("ASK: anthropic".into(), tx).await.unwrap();
+    assert_eq!(outcome.assistant_text, "renewed anthropic");
     session.shutdown().await.unwrap();
 }
