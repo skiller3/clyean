@@ -107,7 +107,8 @@ pub struct SandboxInputs<'a> {
 /// exists.  Returns the marker and whether provisioning ran.
 pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker, bool)> {
     let fs = inputs.location.fs(inputs.podman);
-    let existing = RootfsMarker::read(fs.as_ref())?;
+    let helpers = Helpers::new(inputs.podman.clone(), inputs.environment.sandbox_roots());
+    let existing = RootfsMarker::read_existing(fs.as_ref(), &helpers, &inputs.location.id)?;
     if let Some(marker) = &existing {
         if marker.provisioning_version >= PROVISIONING_VERSION
             && marker.image == inputs.sandbox.image
@@ -117,7 +118,6 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
         tracing::info!(target: "clyean::scaffold", "sandbox is outdated; re-provisioning");
     }
     let arch_tag = inputs.environment.arch_tag()?;
-    let helpers = Helpers::new(inputs.podman.clone(), inputs.environment.sandbox_roots());
     let id = inputs.location.id.clone();
     let image = inputs.sandbox.image.clone();
     let image_digest = match existing {

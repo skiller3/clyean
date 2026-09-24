@@ -8,7 +8,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use clyean_project::SandboxId;
+
 use crate::fs::{SandboxArchive, SandboxFs};
+use crate::roots::Helpers;
 use crate::{Result, SandboxError};
 
 pub const MARKER_PATH: &str = "/.clyean-sandbox.json";
@@ -38,6 +41,20 @@ impl RootfsMarker {
         serde_json::from_slice(&bytes).map(Some).map_err(|e| {
             SandboxError::Invalid(format!("{MARKER_PATH} is not a valid sandbox marker: {e}"))
         })
+    }
+
+    /// The marker of the root filesystem `id`, which may not exist yet: on a Podman
+    /// machine, reading runs a container on the root filesystem, which fails without one.
+    pub fn read_existing(
+        fs: &dyn SandboxFs,
+        helpers: &Helpers,
+        id: &SandboxId,
+    ) -> Result<Option<Self>> {
+        match Self::read(fs) {
+            Ok(marker) => Ok(marker),
+            Err(error) if helpers.is_populated(id)? => Err(error),
+            Err(_) => Ok(None),
+        }
     }
 
     /// The marker after a use by the project at `project_dir`.

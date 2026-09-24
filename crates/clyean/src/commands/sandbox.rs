@@ -38,7 +38,11 @@ fn status(runtime: &ProjectRuntime, podman_sandbox: &PodmanSandbox) -> Result<i3
     println!("Sandbox:      {}", location.id);
     println!("Location:     {}", location.root);
     let fs = location.fs(&runtime.podman);
-    let code = match RootfsMarker::read(fs.as_ref())? {
+    let helpers = Helpers::new(
+        runtime.podman.clone(),
+        podman_sandbox.environment.sandbox_roots(),
+    );
+    let code = match RootfsMarker::read_existing(fs.as_ref(), &helpers, &location.id)? {
         Some(marker) => {
             println!("Image:        {} ({})", marker.image, marker.image_digest);
             println!(

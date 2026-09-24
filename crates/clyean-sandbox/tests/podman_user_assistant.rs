@@ -23,6 +23,7 @@ use clyean_bridge::host::{serve, ConnectFuture, Connector, LocalStream};
 use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
 use clyean_project::{ProjectType, SandboxConfig, SandboxId};
 use clyean_sandbox::orphans::{has_running_bridge, lists_a_bridge, prune_matching};
+use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
     AgentContainerSpec, ContainerUser, Helpers, HostOs, HostPathMapper, LaunchContext, LaunchRole,
     Podman, PodmanEnvironment, SandboxArchive, SandboxRoots,
@@ -403,6 +404,20 @@ async fn a_root_filesystem_persists_across_containers_until_its_helpers_remove_i
         .unwrap()
         .iter()
         .any(|root| root.id == id.as_str()));
+}
+
+#[tokio::test]
+async fn a_root_filesystem_that_does_not_exist_yet_has_no_marker() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let roots = fixture.helpers.roots().clone();
+    let missing = roots.location(SandboxId::generate(), fixture.context.sandbox.topology);
+    let fs = missing.fs(&fixture.podman);
+    assert_eq!(
+        RootfsMarker::read_existing(fs.as_ref(), &fixture.helpers, &missing.id).unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
