@@ -78,7 +78,7 @@ Every agent has its own login store: the harness credential store in that agent'
 - A copy lets an agent use a credential but not refresh it.  Sign-ins are refreshed only in the User Assistant's login store, and Clyean renews each copy from that store before the copy expires, including while the agent is working, so that no agent can invalidate a credential another agent holds.
 - Clyean copies credentials through the harness's own credential interfaces, never by copying a store's files, so that every copy is a consistent snapshot.
 - Each agent's containers expose that agent's own login store and no other agent's.  This is an explicit exception to the shared file system described in the "Sandboxing, Workspaces & Mounts" section.
-- Secrets from the host reach only the agents that need them.  Provider API keys and cloud credentials in the host environment pass to the User Assistant, whose model the user chooses while working, and to each other agent only for the providers of the models it is configured to use.  Further variables that the project passes through reach only the agents the project configuration assigns them to, such as a repository token for the Product Director alone.
+- Secrets from the host reach only the agents that need them.  Provider API keys and cloud credentials in the host environment pass to the User Assistant, whose model the user chooses while working, and to each other agent only for the providers of the models it is configured to use.  Further variables that the project passes through reach only the agents the project configuration assigns them to, such as a repository token for the Software Engineering Director alone.
 
 
 # Oh-My-Pi (omp) Architectural Relationship & Usage
