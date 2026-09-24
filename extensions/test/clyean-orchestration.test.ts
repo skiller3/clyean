@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
 	createFakeContext,
 	createFakePi,
@@ -402,7 +405,7 @@ function shutdownRecorder() {
 	return recorder;
 }
 
-async function installWithLease(socketPath: string) {
+async function installWithLease(socketPath: string, harness?: () => Promise<any>) {
 	sandbox.reset({
 		CLYEAN_AGENT: "user-assistant",
 		CLYEAN_ORCHESTRATOR_SOCKET: socketPath,
@@ -411,7 +414,7 @@ async function installWithLease(socketPath: string) {
 	});
 	const fake = createFakePi();
 	const { default: install } = await importFresh(BRIDGE_MODULE);
-	install(fake.pi);
+	install(fake.pi, harness);
 	return fake;
 }
 
@@ -454,4 +457,183 @@ test("loading the extension again keeps the one lease", async () => {
 	await waitFor(() => leaseRequests().length === 1, 2000, "the lease request");
 	await sleep(50);
 	expect(leaseRequests()).toHaveLength(1);
+});
+
+const MINUTE = 60_000;
+
+function fakeAuthorityHarness(overrides: Record<string, unknown> = {}) {
+	const calls = { modelRefreshes: [] as string[], mcpRefreshes: [] as string[], signIns: [] as string[] };
+	const harness = {
+		envApiKeyName: (provider: string) => (provider === "openai" ? "OPENAI_API_KEY" : undefined),
+		refreshModelCredential: async (provider: string, credential: any) => {
+			calls.modelRefreshes.push(provider);
+			return { ...credential, access: `${credential.access}-renewed`, refresh: "rotated", expires: Date.now() + 60 * MINUTE };
+		},
+		refreshMcpCredential: async (credential: any, serverUrl: string) => {
+			calls.mcpRefreshes.push(serverUrl);
+			return { access: "mcp-renewed", refresh: "mcp-rotated", expires: Date.now() + 60 * MINUTE };
+		},
+		isDefinitiveOAuthFailure: (message: string) => message.includes("invalid_grant"),
+		mcpCredentialId: (serverUrl: string, profile: string) => `mcp_oauth:profile:${profile}:${serverUrl}`,
+		signInToMcpServer: async (serverUrl: string) => {
+			calls.signIns.push(serverUrl);
+			return { type: "oauth", access: "signed-in", refresh: "r", expires: Date.now() + 60 * MINUTE, tokenUrl: "https://auth/token" };
+		},
+		...overrides,
+	};
+	return { harness, calls };
+}
+
+/** A login store with the harness's lease-guarded refresh reduced to its effect. */
+function fakeStore(rows: Record<string, Array<{ id: number; credential: any }>>, environmentProviders: string[] = []) {
+	return {
+		rows,
+		listStoredCredentials: (provider: string) => rows[provider] ?? [],
+		hasAuth: (provider: string) => environmentProviders.includes(provider) || (rows[provider]?.length ?? 0) > 0,
+		set: async (provider: string, credential: any) => {
+			rows[provider] = [{ id: 100, credential }];
+		},
+		refreshStoredOAuthCredential: async (provider: string, options: any) => {
+			if (options.canRefresh && !options.canRefresh(options.observedCredential)) return;
+			const refreshed = await options.refresh(options.observedCredential);
+			const merged = options.mergeRefreshedCredential(options.observedCredential, refreshed);
+			rows[provider] = rows[provider].map(row => (row.id === options.credentialId ? { id: row.id, credential: merged } : row));
+		},
+	};
+}
+
+test("copies are refreshed when they expire soon and never carry refresh tokens or client secrets", async () => {
+	const { copyCredentials } = await importFresh(BRIDGE_MODULE);
+	const { harness, calls } = fakeAuthorityHarness();
+	const serverUrl = "https://mcp.example.com/sse";
+	const store = fakeStore(
+		{
+			anthropic: [
+				{ id: 1, credential: { type: "oauth", access: "soon", refresh: "r1", expires: Date.now() + 5 * MINUTE, email: "a@x" } },
+				{ id: 2, credential: { type: "oauth", access: "later", refresh: "r2", expires: Date.now() + 50 * MINUTE } },
+			],
+			openai: [{ id: 3, credential: { type: "api_key", key: "sk-openai" } }],
+			[`mcp_oauth:profile:user-assistant:${serverUrl}`]: [
+				{
+					id: 4,
+					credential: { type: "oauth", access: "m", refresh: "mr", expires: Date.now() + MINUTE, tokenUrl: "https://auth/token", clientId: "c", clientSecret: "s" },
+				},
+			],
+		},
+		[],
+	);
+	const copies = await copyCredentials(store, harness, {
+		agent: "programmer",
+		providers: ["anthropic", "openai", "xai"],
+		mcp_servers: [serverUrl],
+	});
+	expect(calls.modelRefreshes).toEqual(["anthropic"]);
+	expect(calls.mcpRefreshes).toEqual([serverUrl]);
+	expect(copies.providers.anthropic.map((copy: any) => copy.access)).toEqual(["soon-renewed", "later"]);
+	expect(copies.providers.anthropic.every((copy: any) => copy.refresh === "")).toBe(true);
+	expect(store.rows.anthropic[0].credential.refresh).toBe("rotated");
+	expect(copies.providers.openai).toEqual([{ type: "api_key", key: "sk-openai" }]);
+	const mcpCopy = copies.mcp[`mcp_oauth:profile:programmer:${serverUrl}`];
+	expect(mcpCopy.access).toBe("mcp-renewed");
+	expect(mcpCopy.refresh).toBe("");
+	expect(mcpCopy.clientSecret).toBeUndefined();
+	expect(mcpCopy.tokenUrl).toBe("https://auth/token");
+	expect(copies.unavailable).toEqual(["xai"]);
+});
+
+test("patterns resolve through the harness, then the catalog, then the provider prefix", async () => {
+	const { resolveModels } = await importFresh(BRIDGE_MODULE);
+	const models = {
+		resolve: (spec: string) => (spec.startsWith("gpt-5") ? { provider: "openai", id: "gpt-5" } : undefined),
+		current: () => ({ provider: "openai", id: "gpt-5.5" }),
+	};
+	const catalog = [
+		{ provider: "anthropic", id: "claude-sonnet-4-5" },
+		{ provider: "google", id: "gemini-3-pro" },
+	];
+	const answer = resolveModels(models, catalog, ["gpt-5:high", "anthropic/claude-sonnet-4-5:max", "google/*", "unknown-model"]);
+	expect(answer.models).toEqual({
+		"gpt-5:high": { provider: "openai", model: "openai/gpt-5:high" },
+		"anthropic/claude-sonnet-4-5:max": { provider: "anthropic", model: "anthropic/claude-sonnet-4-5:max" },
+		"google/*": { provider: "google", model: null },
+		"unknown-model": null,
+	});
+	expect(answer.current).toEqual({ provider: "openai", model: "openai/gpt-5.5" });
+});
+
+test("provider variables come from the harness catalog, with fixed lists for computed lookups", async () => {
+	const { providerVariables } = await importFresh(BRIDGE_MODULE);
+	const { harness } = fakeAuthorityHarness();
+	const { variables } = providerVariables(harness, ["openai", "anthropic", "amazon-bedrock", "local-llm"]);
+	expect(variables.openai).toEqual(["OPENAI_API_KEY"]);
+	expect(variables.anthropic).toContain("ANTHROPIC_OAUTH_TOKEN");
+	expect(variables["amazon-bedrock"]).toContain("AWS_SECRET_ACCESS_KEY");
+	expect(variables["local-llm"]).toEqual([]);
+});
+
+test("the lease answers the orchestrator's credential requests from the session's login store", async () => {
+	server = await startStubOrchestrator("lease-credentials", leaseReply);
+	const { harness } = fakeAuthorityHarness();
+	const fake = await installWithLease(server.socketPath, async () => harness);
+	const recorder = shutdownRecorder();
+	recorder.ctx.models = {
+		resolve: (spec: string) => (spec === "gpt-5" ? { provider: "openai", id: "gpt-5" } : undefined),
+		current: () => ({ provider: "openai", id: "gpt-5" }),
+	};
+	recorder.ctx.modelRegistry = {
+		getAll: () => [],
+		authStorage: fakeStore({ openai: [{ id: 1, credential: { type: "api_key", key: "sk" } }] }),
+	};
+	await waitFor(() => leaseRequests().length === 1, 2000, "the lease request");
+	server.send({ id: "early", method: "credentials.variables", params: { providers: ["openai"] } });
+	await waitFor(() => server!.followUps.length === 1, 2000, "the early answer");
+	expect(server.followUps[0]).toEqual({ id: "early", error: { code: "not_ready", message: "the User Assistant's session has not started" } });
+
+	await fake.emit("session_start", {}, recorder.ctx);
+	server.send({ id: "c1", method: "credentials.resolve", params: { patterns: ["gpt-5"] } });
+	server.send({ id: "c2", method: "credentials.copies", params: { agent: "programmer", providers: ["openai"], mcp_servers: [] } });
+	server.send({ id: "c3", method: "credentials.nonsense", params: {} });
+	await waitFor(() => server!.followUps.length === 4, 2000, "the answers");
+	const answers = Object.fromEntries(server.followUps.map(frame => [frame.id, frame]));
+	expect(answers.c1.result.models).toEqual({ "gpt-5": { provider: "openai", model: "openai/gpt-5" } });
+	expect(answers.c2.result.providers).toEqual({ openai: [{ type: "api_key", key: "sk" }] });
+	expect(answers.c3.error.message).toContain("unknown method credentials.nonsense");
+	expect(recorder.shutdowns).toBe(0);
+});
+
+test("signing in for another agent reads its MCP servers and records the sign-in in this login store", async () => {
+	const { signInOnBehalf } = await importFresh(BRIDGE_MODULE);
+	const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "clyean-signin-"));
+	try {
+		const agents = path.join(projectDir, ".clyean", "agents");
+		fs.mkdirSync(agents, { recursive: true });
+		fs.writeFileSync(
+			path.join(agents, "SOFTWARE_ENGINEERING_DIRECTOR.mcp.json"),
+			JSON.stringify({ mcpServers: { tracker: { url: "https://tracker.example.com/mcp" }, local: { command: "x" } } }),
+		);
+		fs.writeFileSync(
+			path.join(agents, "SOFTWARE_ENGINEERING_DIRECTOR.mcp.local.json"),
+			JSON.stringify({ mcpServers: { tracker: { url: "https://tracker.internal/mcp" } } }),
+		);
+		const { harness, calls } = fakeAuthorityHarness();
+		const store = fakeStore({});
+		const callbacks = { onAuth: () => {}, onManualCodeInput: async () => "" };
+		const url = await signInOnBehalf(
+			{ agent: "software-engineering-director", server: "tracker", projectDir },
+			store,
+			harness,
+			callbacks,
+		);
+		expect(url).toBe("https://tracker.internal/mcp");
+		expect(calls.signIns).toEqual(["https://tracker.internal/mcp"]);
+		expect(store.rows["mcp_oauth:profile:user-assistant:https://tracker.internal/mcp"][0].credential.access).toBe("signed-in");
+		await expect(
+			signInOnBehalf({ agent: "software-engineering-director", server: "local", projectDir }, store, harness, callbacks),
+		).rejects.toThrow("not a remote MCP server");
+		await expect(
+			signInOnBehalf({ agent: "programmer", server: "tracker", projectDir }, store, harness, callbacks),
+		).rejects.toThrow("has no MCP server named tracker");
+	} finally {
+		fs.rmSync(projectDir, { recursive: true, force: true });
+	}
 });
