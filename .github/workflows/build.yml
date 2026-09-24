@@ -1,7 +1,8 @@
 # Reusable build pipeline shared by ci.yml (every commit on every branch) and
 # release.yml (tagged releases). It runs the unit and integration tests first
 # and, only when they pass, builds the clyean CLI for every supported host
-# platform plus the contained harness for the Linux sandbox architectures.
+# platform plus the contained harness and the static bridge for the Linux
+# sandbox architectures.
 # When upload_release_tag is set, the built assets are attached to the GitHub
 # release for that tag together with a SHA256SUMS manifest.
 name: Build
@@ -21,13 +22,20 @@ env:
 
 jobs:
   test-rust:
-    name: Rust tests
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 carries Podman 4.9.3, the oldest release Clyean supports on
+    # Linux, and Ubuntu 26.04 carries Podman 5.7.0.
+    name: Rust tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - name: Ensure Podman is available for sandbox integration tests
         shell: bash
@@ -41,10 +49,14 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build the static bridge for the Podman tests
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p clyean-bridge
       - name: Unit and integration tests
         env:
           CLYEAN_PODMAN_TESTS: "1"
-        run: cargo test --workspace --locked
+        run: |
+          export CLYEAN_BRIDGE_BINARY="$PWD/target/x86_64-unknown-linux-musl/release/clyean-bridge"
+          cargo test --workspace --locked
 
   test-extensions:
     name: Harness extension tests
@@ -152,6 +164,51 @@ jobs:
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
+  build-bridge:
+    # The bridge runs inside sandbox images of any C library, so it is a static
+    # musl executable with no dependencies beyond the standard library.
+    name: Build bridge (${{ matrix.asset }})
+    needs: [test-rust, test-extensions, test-harness]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: clyean-bridge-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: clyean-bridge-linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p clyean-bridge
+      - name: Rename binary to release asset name
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/clyean-bridge" "dist/${{ matrix.asset }}"
+      - name: Smoke test
+        shell: bash
+        run: |
+          ./dist/${{ matrix.asset }} --version
+          if ldd "dist/${{ matrix.asset }}" 2>/dev/null | grep -q '=>'; then
+            echo "the bridge must be statically linked" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
   build-harness:
     name: Build contained harness (linux-x64, linux-arm64)
     needs: [test-rust, test-extensions, test-harness]
@@ -208,7 +265,7 @@ jobs:
   publish:
     name: Publish release assets
     if: inputs.upload_release_tag != ''
-    needs: [build-cli, build-harness]
+    needs: [build-cli, build-bridge, build-harness]
     # Permissions are inherited from the caller: release.yml grants
     # contents: write, while ci.yml (where this job is skipped) grants read.
     runs-on: ubuntu-latest

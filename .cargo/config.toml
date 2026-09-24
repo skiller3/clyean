@@ -3,3 +3,8 @@
 # refuses to overwrite a binary whose crate version has not changed.
 [alias]
 build-bin = "install --path crates/clyean --root . --locked --force"
+# `cargo build-bridge` installs the static bridge that User Assistant containers mount
+# at bin/clyean-bridge, beside bin/clyean, where clyean finds it.  It needs
+# `rustup target add x86_64-unknown-linux-musl` once.  On an ARM64 host, run the same
+# cargo install command with --target aarch64-unknown-linux-musl instead.
+build-bridge = "install --path crates/clyean-bridge --root . --locked --force --target x86_64-unknown-linux-musl"
