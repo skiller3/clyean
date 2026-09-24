@@ -13,15 +13,17 @@ use crate::user::ContainerUser;
 pub const ORCHESTRATOR_SOCKET_CONTAINER_PATH: &str = "/run/clyean/orchestrator.sock";
 pub const HARNESS_CONTAINER_PATH: &str = "/usr/local/bin/clyean";
 
+/// A bind mount.  The source is a path on the Podman host, which inside a Podman machine
+/// differs from the path on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountSpec {
-    pub source: PathBuf,
+    pub source: String,
     pub target: String,
     pub read_only: bool,
 }
 
 impl MountSpec {
-    pub fn read_only(source: impl Into<PathBuf>, target: impl Into<String>) -> Self {
+    pub fn read_only(source: impl Into<String>, target: impl Into<String>) -> Self {
         Self {
             source: source.into(),
             target: target.into(),
@@ -29,7 +31,7 @@ impl MountSpec {
         }
     }
 
-    pub fn read_write(source: impl Into<PathBuf>, target: impl Into<String>) -> Self {
+    pub fn read_write(source: impl Into<String>, target: impl Into<String>) -> Self {
         Self {
             source: source.into(),
             target: target.into(),
@@ -38,11 +40,7 @@ impl MountSpec {
     }
 
     fn podman_argument(&self) -> String {
-        let mut argument = format!(
-            "type=bind,src={},dst={}",
-            self.source.display(),
-            self.target
-        );
+        let mut argument = format!("type=bind,src={},dst={}", self.source, self.target);
         if self.read_only {
             argument.push_str(",ro=true");
         }
@@ -86,12 +84,6 @@ impl ContainerPaths {
         format!("{}/.clyean/architecture", self.project_dir)
     }
 
-    /// The path that must be masked so agents cannot traverse the root filesystem
-    /// through the workspace mount.
-    pub fn container_root_mask(&self) -> String {
-        format!("{}/.clyean/container-root", self.project_dir)
-    }
-
     /// Translates a host path inside the workspace to its container path.
     pub fn translate_host_path(&self, host_path: &Path) -> Option<String> {
         let relative = host_path.strip_prefix(&self.host_workspace_dir).ok()?;
@@ -115,7 +107,8 @@ fn join_container_path(base: &str, relative: &Path) -> String {
 pub struct AgentContainerSpec {
     pub name: String,
     pub agent: AgentId,
-    pub rootfs: PathBuf,
+    /// The root filesystem's path on the Podman host.
+    pub rootfs: String,
     pub workdir: String,
     pub labels: Vec<(String, String)>,
     pub mounts: Vec<MountSpec>,
@@ -126,13 +119,20 @@ pub struct AgentContainerSpec {
     pub remove_on_exit: bool,
     pub extra_run_args: Vec<String>,
     pub command: Vec<String>,
+    /// The key sequence that detaches from the container's terminal: empty, which turns
+    /// detaching off, or one nobody types where Podman cannot turn it off.
+    pub detach_keys: &'static str,
 }
+
+/// Podman's remote client, which reaches a Podman machine, rejects the empty sequence
+/// that turns detaching off, so there the sequence is one nobody types.
+pub const REMOTE_DETACH_KEYS: &str = "ctrl-],ctrl-^,ctrl-],ctrl-^";
 
 impl AgentContainerSpec {
     /// The complete argument vector after `podman`.  Every option precedes the rootfs
     /// path because Podman stops parsing options at the first positional argument.
-    /// Detaching is always disabled: no one reattaches to an agent container, and the key
-    /// sequence must never be taken out of an agent's input.
+    /// No one reattaches to an agent container, so detaching never takes keys out of an
+    /// agent's input.
     pub fn run_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "run".into(),
@@ -140,7 +140,7 @@ impl AgentContainerSpec {
             "--name".into(),
             self.name.clone(),
             "--interactive".into(),
-            "--detach-keys=".into(),
+            format!("--detach-keys={}", self.detach_keys),
         ];
         if self.tty {
             args.push("--tty".into());
@@ -159,7 +159,7 @@ impl AgentContainerSpec {
             args.push(mount.podman_argument());
         }
         // Without notmpcopyup, Podman copies whatever the root filesystem holds at the path
-        // into memory: for the mask over the in-project root filesystem, all of it.
+        // into memory, for the profiles mask every agent's profile.
         for path in &self.tmpfs_mounts {
             args.push("--mount".into());
             args.push(format!("type=tmpfs,dst={path},notmpcopyup"));
@@ -170,7 +170,7 @@ impl AgentContainerSpec {
         }
         args.extend(self.extra_run_args.iter().cloned());
         args.push("--rootfs".into());
-        args.push(self.rootfs.to_string_lossy().into_owned());
+        args.push(self.rootfs.clone());
         args.extend(self.command.iter().cloned());
         args
     }
@@ -198,10 +198,6 @@ mod tests {
             "/home/skyei/workspace/workspace/clyean"
         );
         assert_eq!(
-            paths.container_root_mask(),
-            "/home/skyei/workspace/workspace/clyean/.clyean/container-root"
-        );
-        assert_eq!(
             paths.translate_host_path(Path::new("/home/skyei/workspace/clyean/src/main.rs")),
             Some("/home/skyei/workspace/workspace/clyean/src/main.rs".to_string())
         );
@@ -219,23 +215,27 @@ mod tests {
         let spec = AgentContainerSpec {
             name: "clyean-abc-programmer".into(),
             agent: AgentId::Programmer,
-            rootfs: PathBuf::from("/p/.clyean/container-root"),
+            rootfs: "/home/skyei/.local/share/clyean/roots/3f9c2a7d1e4b8c05".into(),
             workdir: "/home/skyei/workspace/p".into(),
             labels: vec![("clyean.role".into(), "user-assistant".into())],
             mounts: vec![
                 MountSpec::read_write("/host/p", "/home/skyei/workspace/p"),
                 MountSpec::read_only("/host/data", "/mnt/data"),
             ],
-            tmpfs_mounts: vec!["/home/skyei/workspace/p/.clyean/container-root".into()],
+            tmpfs_mounts: vec!["/home/skyei/.omp/profiles".into()],
             environment: vec![("CLYEAN_AGENT".into(), "programmer".into())],
             tty: false,
             remove_on_exit: true,
             extra_run_args: vec!["--memory".into(), "4g".into()],
             command: vec!["clyean".into(), "--mode".into(), "rpc".into()],
+            detach_keys: "",
         };
         let args = spec.run_args();
         let rootfs_index = args.iter().position(|a| a == "--rootfs").unwrap();
-        assert_eq!(args[rootfs_index + 1], "/p/.clyean/container-root");
+        assert_eq!(
+            args[rootfs_index + 1],
+            "/home/skyei/.local/share/clyean/roots/3f9c2a7d1e4b8c05"
+        );
         assert_eq!(&args[rootfs_index + 2..], ["clyean", "--mode", "rpc"]);
         let options = &args[..rootfs_index];
         for expected in [
@@ -245,7 +245,7 @@ mod tests {
             "clyean.role=user-assistant",
             "type=bind,src=/host/data,dst=/mnt/data,ro=true",
             "type=bind,src=/host/p,dst=/home/skyei/workspace/p",
-            "type=tmpfs,dst=/home/skyei/workspace/p/.clyean/container-root,notmpcopyup",
+            "type=tmpfs,dst=/home/skyei/.omp/profiles,notmpcopyup",
             "CLYEAN_AGENT=programmer",
             "--memory",
         ] {

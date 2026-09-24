@@ -14,27 +14,6 @@ pub struct Podman {
     binary: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PodmanHostInfo {
-    pub os: String,
-    pub arch: String,
-    pub rootless: bool,
-    pub version: String,
-}
-
-impl PodmanHostInfo {
-    /// The architecture tag used in harness release asset names (`x64` or `arm64`).
-    pub fn harness_arch_tag(&self) -> Result<&'static str> {
-        match self.arch.as_str() {
-            "amd64" | "x86_64" => Ok("x64"),
-            "arm64" | "aarch64" => Ok("arm64"),
-            other => Err(SandboxError::Invalid(format!(
-                "unsupported sandbox architecture {other}; Clyean ships harness binaries for amd64 and arm64"
-            ))),
-        }
-    }
-}
-
 impl Default for Podman {
     fn default() -> Self {
         Self::new("podman")
@@ -50,27 +29,6 @@ impl Podman {
 
     pub fn binary(&self) -> &std::path::Path {
         &self.binary
-    }
-
-    pub fn host_info(&self) -> Result<PodmanHostInfo> {
-        let text = self.output([
-            "info",
-            "--format",
-            "{{.Host.OS}}|{{.Host.Arch}}|{{.Host.Security.Rootless}}|{{.Version.Version}}",
-        ])?;
-        let fields: Vec<&str> = text.trim().split('|').collect();
-        if fields.len() != 4 {
-            return Err(SandboxError::PodmanFailed {
-                command: "info".to_string(),
-                stderr: format!("unexpected output {text:?}"),
-            });
-        }
-        Ok(PodmanHostInfo {
-            os: fields[0].to_string(),
-            arch: fields[1].to_string(),
-            rootless: fields[2] == "true",
-            version: fields[3].to_string(),
-        })
     }
 
     /// Runs podman with `args`, returning stdout on success.

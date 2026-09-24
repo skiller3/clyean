@@ -3,8 +3,10 @@
 
 //! Projection of an agent's tracked configuration into its harness profile directory
 //! inside the sandbox root filesystem: `/home/<user>/.omp/profiles/<agent-id>/agent/`.
+//! The projection only plans: it names the profile files it must read first and returns
+//! the files to write, and the caller moves them through the sandbox filesystem.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
 use clyean_project::local_overlay::deep_merge;
 use clyean_project::ProjectLayout;
@@ -12,9 +14,7 @@ use serde_json::Value;
 
 use crate::instructions::effective_instructions;
 use crate::roster::AgentId;
-use crate::settings::{
-    effective_mcp_seed, effective_settings_overlay, read_json_if_present, write_json,
-};
+use crate::settings::{effective_mcp_seed, effective_settings_overlay};
 use crate::{AgentError, Result};
 
 pub const OVERLAY_FILE_NAME: &str = "clyean-overlay.json";
@@ -77,21 +77,6 @@ pub fn container_credentials_bundle_path(user: &str, agent: AgentId) -> String {
     )
 }
 
-/// Host-side path of an agent's profile root inside the root filesystem.
-pub fn host_profile_root(container_root: &Path, user: &str, agent: AgentId) -> PathBuf {
-    container_root
-        .join("home")
-        .join(user)
-        .join(".omp")
-        .join("profiles")
-        .join(agent.id())
-}
-
-/// Host-side path of the same profile directory inside the root filesystem.
-pub fn host_profile_dir(container_root: &Path, user: &str, agent: AgentId) -> PathBuf {
-    host_profile_root(container_root, user, agent).join("agent")
-}
-
 /// Everything Clyean writes into one agent's profile before launching it.
 #[derive(Debug, Clone)]
 pub struct ProfileProjection {
@@ -102,10 +87,12 @@ pub struct ProfileProjection {
     pub extensions: Vec<ManagedExtension>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct ProfileWriteReport {
-    pub written: Vec<PathBuf>,
-    pub extensions_refreshed: Vec<&'static str>,
+/// A file to write into the root filesystem: its absolute path there, contents, and mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileFile {
+    pub path: String,
+    pub contents: Vec<u8>,
+    pub mode: u32,
 }
 
 impl ProfileProjection {
@@ -123,57 +110,90 @@ impl ProfileProjection {
         })
     }
 
-    /// Writes the projection into the root filesystem.  `AGENTS.md` and the overlay are
-    /// always replaced; `mcp.json` keeps servers the user added through the harness and
-    /// layers the tracked seed on top; extensions are refreshed only when their version
-    /// marker is behind the embedded one.
-    pub fn write(&self, container_root: &Path, user: &str) -> Result<ProfileWriteReport> {
-        let profile_dir = host_profile_dir(container_root, user, self.agent);
-        std::fs::create_dir_all(&profile_dir)
-            .map_err(|e| AgentError::io(format!("creating {}", profile_dir.display()), e))?;
-        let mut report = ProfileWriteReport::default();
+    /// The profile files the projection depends on: `mcp.json` and every managed
+    /// extension it may replace.
+    pub fn reads(&self, user: &str) -> Vec<String> {
+        let profile_dir = container_profile_dir(user, self.agent);
+        let mut paths = vec![format!("{profile_dir}/{MCP_FILE_NAME}")];
+        paths.extend(self.extensions.iter().map(|extension| {
+            format!(
+                "{profile_dir}/{EXTENSIONS_DIR_NAME}/{}",
+                extension.file_name
+            )
+        }));
+        paths
+    }
 
-        let agents_path = profile_dir.join(AGENTS_FILE_NAME);
-        std::fs::write(&agents_path, &self.agents_md)
-            .map_err(|e| AgentError::io(format!("writing {}", agents_path.display()), e))?;
-        report.written.push(agents_path);
-
-        let overlay_path = profile_dir.join(OVERLAY_FILE_NAME);
-        write_json(&overlay_path, &self.settings_overlay)?;
-        report.written.push(overlay_path);
-
+    /// The files to write, given the current contents of the paths `reads` named.
+    /// `AGENTS.md` and the overlay are always replaced; `mcp.json` keeps servers the user
+    /// added through the harness and layers the tracked seed on top; extensions are
+    /// written only when their version marker is behind the embedded one.
+    pub fn files(
+        &self,
+        user: &str,
+        existing: &HashMap<String, Vec<u8>>,
+    ) -> Result<Vec<ProfileFile>> {
+        let profile_dir = container_profile_dir(user, self.agent);
+        let mut files = vec![
+            ProfileFile {
+                path: format!("{profile_dir}/{AGENTS_FILE_NAME}"),
+                contents: self.agents_md.clone().into_bytes(),
+                mode: 0o644,
+            },
+            ProfileFile {
+                path: format!("{profile_dir}/{OVERLAY_FILE_NAME}"),
+                contents: json_bytes(&self.settings_overlay),
+                mode: 0o644,
+            },
+        ];
         if let Some(seed) = &self.mcp_seed {
-            let mcp_path = profile_dir.join(MCP_FILE_NAME);
-            let existing =
-                read_json_if_present(&mcp_path)?.unwrap_or(Value::Object(Default::default()));
-            write_json(&mcp_path, &deep_merge(existing, seed.clone()))?;
-            report.written.push(mcp_path);
+            let path = format!("{profile_dir}/{MCP_FILE_NAME}");
+            let current = match existing.get(&path) {
+                Some(bytes) => {
+                    serde_json::from_slice(bytes).map_err(|source| AgentError::Json {
+                        path: path.clone().into(),
+                        source,
+                    })?
+                }
+                None => Value::Object(Default::default()),
+            };
+            files.push(ProfileFile {
+                contents: json_bytes(&deep_merge(current, seed.clone())),
+                path,
+                mode: 0o644,
+            });
         }
-
-        let extensions_dir = profile_dir.join(EXTENSIONS_DIR_NAME);
         for extension in &self.extensions {
-            let path = extensions_dir.join(extension.file_name);
-            if extension_is_current(&path, extension) {
+            let path = format!(
+                "{profile_dir}/{EXTENSIONS_DIR_NAME}/{}",
+                extension.file_name
+            );
+            let installed = existing
+                .get(&path)
+                .map(|bytes| String::from_utf8_lossy(bytes));
+            if installed.is_some_and(|source| extension_is_current(&source, extension)) {
                 continue;
             }
-            std::fs::create_dir_all(&extensions_dir)
-                .map_err(|e| AgentError::io(format!("creating {}", extensions_dir.display()), e))?;
-            std::fs::write(&path, extension.source)
-                .map_err(|e| AgentError::io(format!("writing {}", path.display()), e))?;
-            report.extensions_refreshed.push(extension.file_name);
-            report.written.push(path);
+            files.push(ProfileFile {
+                path,
+                contents: extension.source.as_bytes().to_vec(),
+                mode: 0o644,
+            });
         }
-        Ok(report)
+        Ok(files)
     }
 }
 
-fn extension_is_current(path: &Path, extension: &ManagedExtension) -> bool {
-    let Ok(existing) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    match (extension_version(&existing), extension.version()) {
+fn json_bytes(value: &Value) -> Vec<u8> {
+    let mut text = serde_json::to_string_pretty(value).expect("JSON values serialize");
+    text.push('\n');
+    text.into_bytes()
+}
+
+fn extension_is_current(installed: &str, extension: &ManagedExtension) -> bool {
+    match (extension_version(installed), extension.version()) {
         (Some(installed), Some(embedded)) => installed >= embedded,
-        _ => existing == extension.source,
+        _ => installed == extension.source,
     }
 }
 
@@ -183,6 +203,7 @@ mod tests {
     use crate::instructions::write_baseline_if_missing;
     use crate::settings::write_seeds_if_missing;
     use serde_json::json;
+    use std::path::Path;
 
     const EXTENSION_V1: &str =
         "// managed by clyean\n// CLYEAN_EXTENSION_VERSION=1\nexport default function () {}\n";
@@ -208,24 +229,22 @@ mod tests {
         );
     }
 
+    fn by_path(files: &[ProfileFile]) -> HashMap<String, Vec<u8>> {
+        files
+            .iter()
+            .map(|file| (file.path.clone(), file.contents.clone()))
+            .collect()
+    }
+
     #[test]
-    fn projection_writes_profile_files_and_preserves_user_added_mcp_servers() {
+    fn projection_plans_profile_files_and_preserves_user_added_mcp_servers() {
         let project = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
         let layout = scaffolded_layout(project.path());
         std::fs::write(
             layout.agents_dir().join("USER_ASSISTANT.mcp.json"),
             r#"{"mcpServers": {"tracked": {"type": "stdio", "command": "x"}}}"#,
         )
         .unwrap();
-        let profile_dir = host_profile_dir(root.path(), "skye", AgentId::UserAssistant);
-        std::fs::create_dir_all(&profile_dir).unwrap();
-        std::fs::write(
-            profile_dir.join(MCP_FILE_NAME),
-            r#"{"mcpServers": {"added-by-user": {"type": "stdio", "command": "y"}}}"#,
-        )
-        .unwrap();
-
         let projection = ProfileProjection::for_agent(
             &layout,
             AgentId::UserAssistant,
@@ -235,50 +254,65 @@ mod tests {
             }],
         )
         .unwrap();
-        let report = projection.write(root.path(), "skye").unwrap();
-        assert_eq!(report.extensions_refreshed, vec!["clyean-test.ts"]);
-
-        let agents_md = std::fs::read_to_string(profile_dir.join(AGENTS_FILE_NAME)).unwrap();
+        let profile_dir = "/home/skye/.omp/profiles/user-assistant/agent";
+        assert_eq!(
+            projection.reads("skye"),
+            [
+                format!("{profile_dir}/mcp.json"),
+                format!("{profile_dir}/extensions/clyean-test.ts")
+            ]
+        );
+        let existing = HashMap::from([(
+            format!("{profile_dir}/mcp.json"),
+            br#"{"mcpServers": {"added-by-user": {"type": "stdio", "command": "y"}}}"#.to_vec(),
+        )]);
+        let files = by_path(&projection.files("skye", &existing).unwrap());
+        let agents_md = String::from_utf8_lossy(&files[&format!("{profile_dir}/AGENTS.md")]);
         assert!(agents_md.contains("# User Assistant"));
-        let mcp: Value = serde_json::from_str(
-            &std::fs::read_to_string(profile_dir.join(MCP_FILE_NAME)).unwrap(),
-        )
-        .unwrap();
+        let mcp: Value =
+            serde_json::from_slice(&files[&format!("{profile_dir}/mcp.json")]).unwrap();
         assert_eq!(mcp["mcpServers"]["tracked"]["command"], "x");
         assert_eq!(mcp["mcpServers"]["added-by-user"]["command"], "y");
-        let overlay: Value = serde_json::from_str(
-            &std::fs::read_to_string(profile_dir.join(OVERLAY_FILE_NAME)).unwrap(),
-        )
-        .unwrap();
+        let overlay: Value =
+            serde_json::from_slice(&files[&format!("{profile_dir}/clyean-overlay.json")]).unwrap();
         assert_eq!(overlay, json!({}));
+        assert_eq!(
+            files[&format!("{profile_dir}/extensions/clyean-test.ts")],
+            EXTENSION_V1.as_bytes()
+        );
     }
 
     #[test]
-    fn extensions_are_refreshed_only_when_the_embedded_version_is_newer() {
+    fn extensions_are_written_only_when_the_embedded_version_is_newer() {
         let project = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
         let layout = scaffolded_layout(project.path());
-        let write_with = |source: &'static str| {
-            ProfileProjection::for_agent(
+        let path = "/home/skye/.omp/profiles/user-assistant/agent/extensions/clyean-test.ts";
+        let writes = |embedded: &'static str, installed: Option<&str>| {
+            let projection = ProfileProjection::for_agent(
                 &layout,
                 AgentId::UserAssistant,
                 vec![ManagedExtension {
                     file_name: "clyean-test.ts",
-                    source,
+                    source: embedded,
                 }],
             )
-            .unwrap()
-            .write(root.path(), "skye")
-            .unwrap()
-            .extensions_refreshed
-            .len()
+            .unwrap();
+            let existing: HashMap<String, Vec<u8>> = installed
+                .map(|source| (path.to_string(), source.as_bytes().to_vec()))
+                .into_iter()
+                .collect();
+            projection
+                .files("skye", &existing)
+                .unwrap()
+                .iter()
+                .any(|file| file.path == path)
         };
-        assert_eq!(write_with(EXTENSION_V2), 1);
-        assert_eq!(
-            write_with(EXTENSION_V1),
-            0,
-            "older embedded version must not downgrade"
+        assert!(writes(EXTENSION_V2, None));
+        assert!(writes(EXTENSION_V2, Some(EXTENSION_V1)));
+        assert!(
+            !writes(EXTENSION_V1, Some(EXTENSION_V2)),
+            "an older embedded version must not downgrade"
         );
-        assert_eq!(write_with(EXTENSION_V2), 0, "same version is left alone");
+        assert!(!writes(EXTENSION_V2, Some(EXTENSION_V2)));
     }
 }

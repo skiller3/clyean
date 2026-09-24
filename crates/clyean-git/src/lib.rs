@@ -182,6 +182,20 @@ impl GitRepository {
     }
 }
 
+/// The value of `key` in the host's global Git configuration, or else its system
+/// configuration, ignoring any repository.
+pub fn host_setting(key: &str) -> Option<String> {
+    ["--global", "--system"].into_iter().find_map(|scope| {
+        let output = std::process::Command::new("git")
+            .args(["config", scope, "--get", key])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (output.status.success() && !value.is_empty()).then_some(value)
+    })
+}
+
 fn git_output(workdir: &Path, args: &[&str]) -> Result<String> {
     let os_args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_ref()).collect();
     git_output_os(workdir, &os_args)

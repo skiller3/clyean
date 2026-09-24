@@ -21,10 +21,6 @@ pub struct IgnoreRule {
 
 pub const REQUIRED_IGNORE_RULES: &[IgnoreRule] = &[
     IgnoreRule {
-        pattern: "/container-root/",
-        probe: "container-root/etc/hostname",
-    },
-    IgnoreRule {
         pattern: "*.local.json",
         probe: "project.local.json",
     },
@@ -89,14 +85,13 @@ mod tests {
     fn writes_only_the_rules_git_does_not_already_honor() {
         let dir = tempfile::tempdir().unwrap();
         let layout = ProjectLayout::new(dir.path());
-        let added = ensure_ignore_rules(&layout, |path| {
-            Ok(path.to_string_lossy().contains("container-root"))
-        })
-        .unwrap();
-        assert!(!added.contains(&"/container-root/"));
+        let added =
+            ensure_ignore_rules(&layout, |path| Ok(path.to_string_lossy().ends_with("lock")))
+                .unwrap();
+        assert!(!added.contains(&"/lock"));
         assert!(added.contains(&"*.local.json"));
         let written = std::fs::read_to_string(layout.clyean_gitignore_path()).unwrap();
-        assert!(!written.contains("/container-root/"));
+        assert!(!written.contains("/lock"));
         assert!(written.contains("*.local.md\n"));
         assert!(written.ends_with('\n'));
     }

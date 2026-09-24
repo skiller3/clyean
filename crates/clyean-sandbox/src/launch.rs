@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use clyean_agents::profile::{
     container_credentials_bundle_path, container_daemon_dirs, container_overlay_path,
-    container_profile_root, host_profile_root,
+    container_profile_root,
 };
 use clyean_agents::AgentId;
 use clyean_plantuml::render::{CommandOutcome, CommandRunner};
@@ -16,9 +16,11 @@ use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, Proje
 
 use crate::container::{
     AgentContainerSpec, ContainerPaths, MountSpec, HARNESS_CONTAINER_PATH,
-    ORCHESTRATOR_SOCKET_CONTAINER_PATH,
+    ORCHESTRATOR_SOCKET_CONTAINER_PATH, REMOTE_DETACH_KEYS,
 };
+use crate::environment::{HostPathMapper, Topology};
 use crate::herdr::{self, HerdrHostContext};
+use crate::roots::SandboxLocation;
 
 /// Labels that identify the User Assistant containers of every project.
 pub const PROJECT_LABEL: &str = "clyean.project";
@@ -42,16 +44,21 @@ pub struct LaunchContext {
     pub user: ContainerUser,
     pub clyean_version: String,
     pub herdr: Option<HerdrHostContext>,
+    pub sandbox: SandboxLocation,
+    pub host_paths: HostPathMapper,
+    /// The host's Git settings that must hold inside containers too, such as
+    /// `core.autocrlf`, so that files do not look modified on the other side.
+    pub git_settings: Vec<(String, String)>,
 }
 
 /// How an agent participates in work, which decides its interactivity and identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchRole {
     /// The User Assistant of one `clyean` invocation, which reaches that invocation only
-    /// through the bridge mounted from `bridge_binary` on the host.
+    /// through the bridge mounted from `bridge_binary`, a path on the Podman host.
     UserAssistant {
         launch_id: LaunchId,
-        bridge_binary: PathBuf,
+        bridge_binary: String,
     },
     /// A sub-agent driven over RPC for one unit of work.  It receives the host variables
     /// that `secrets` names (exact names or `*` glob patterns), which are its providers'
@@ -95,11 +102,11 @@ impl LaunchContext {
         }
     }
 
-    /// The mounts every agent gets: the workspace read-write, extra host paths read-only
-    /// under `/mnt`, and the mask over `.clyean/container-root`.
-    fn shared_mounts(&self, paths: &ContainerPaths) -> (Vec<MountSpec>, Vec<String>) {
+    /// The mounts every agent gets: the workspace read-write and extra host paths
+    /// read-only under `/mnt`.
+    pub fn shared_mounts(&self, paths: &ContainerPaths) -> Vec<MountSpec> {
         let mut mounts = vec![MountSpec::read_write(
-            self.directory.workspace(),
+            self.host_paths.map(self.directory.workspace()),
             paths.workspace_dir(),
         )];
         for host_path in &self.config.sandbox.mounts {
@@ -108,11 +115,11 @@ impl LaunchContext {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "mount".to_string());
             mounts.push(MountSpec::read_only(
-                host_path.clone(),
+                self.host_paths.map(host_path),
                 format!("/mnt/{name}"),
             ));
         }
-        (mounts, vec![paths.container_root_mask()])
+        mounts
     }
 
     /// Empty file systems over every agent's profile and over `~/.omp/agent`, which no
@@ -131,10 +138,8 @@ impl LaunchContext {
         if matches!(role, LaunchRole::Maintenance) {
             return (Vec::new(), masks);
         }
-        let own_profile = MountSpec::read_write(
-            host_profile_root(&self.layout.container_root_dir(), user, agent),
-            container_profile_root(user, agent),
-        );
+        let profile = container_profile_root(user, agent);
+        let own_profile = MountSpec::read_write(format!("{}{profile}", self.sandbox.root), profile);
         (vec![own_profile], masks)
     }
 
@@ -176,17 +181,19 @@ impl LaunchContext {
                 "CLYEAN_HOST_WORKSPACE_DIR".to_string(),
                 self.directory.workspace().to_string_lossy().into_owned(),
             ),
-            (
-                "CLYEAN_HOST_CONTAINER_ROOT".to_string(),
-                self.layout
-                    .container_root_dir()
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
             ("HOME".to_string(), self.user.home()),
             ("OMP_PROFILE".to_string(), agent.id().to_string()),
             ("LANG".to_string(), "C.UTF-8".to_string()),
         ];
+        env.extend(self.git_environment(paths));
+        // Herdr, on this host, can open the root filesystem's files only when it lives on
+        // this host's kernel.
+        if self.sandbox.topology == Topology::SharedKernel {
+            env.push((
+                "CLYEAN_HOST_CONTAINER_ROOT".to_string(),
+                self.sandbox.root.clone(),
+            ));
+        }
         env.extend(
             agent
                 .git_identity()
@@ -194,6 +201,25 @@ impl LaunchContext {
                 .into_iter()
                 .map(|(key, value)| (key.to_string(), value)),
         );
+        env
+    }
+
+    /// Git configuration for every container, through Git's `GIT_CONFIG_*` variables: the
+    /// host's line-ending settings, and the workspace and project as safe directories,
+    /// because files crossing a shared filesystem can appear owned by another user.
+    fn git_environment(&self, paths: &ContainerPaths) -> Vec<(String, String)> {
+        let mut settings = self.git_settings.clone();
+        for directory in [paths.workspace_dir(), paths.project_dir()] {
+            let setting = ("safe.directory".to_string(), directory.to_string());
+            if !settings.contains(&setting) {
+                settings.push(setting);
+            }
+        }
+        let mut env = vec![("GIT_CONFIG_COUNT".to_string(), settings.len().to_string())];
+        for (index, (key, value)) in settings.into_iter().enumerate() {
+            env.push((format!("GIT_CONFIG_KEY_{index}"), key));
+            env.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+        }
         env
     }
 
@@ -206,10 +232,9 @@ impl LaunchContext {
         harness_args: Vec<String>,
     ) -> AgentContainerSpec {
         let paths = self.container_paths();
-        let (mut mounts, mut tmpfs_mounts) = self.shared_mounts(&paths);
-        let (profile_mounts, profile_masks) = self.profile_isolation(agent, &role);
+        let mut mounts = self.shared_mounts(&paths);
+        let (profile_mounts, tmpfs_mounts) = self.profile_isolation(agent, &role);
         mounts.extend(profile_mounts);
-        tmpfs_mounts.extend(profile_masks);
         let mut environment =
             select_host_variables(std::env::vars(), &self.secret_patterns(agent, &role));
         environment.extend(self.shared_environment(agent, &paths));
@@ -218,9 +243,9 @@ impl LaunchContext {
         let mut spec = AgentContainerSpec {
             name: self.container_name(agent, &role),
             agent,
-            rootfs: self.layout.container_root_dir(),
+            rootfs: self.sandbox.root.clone(),
             workdir: paths.project_dir().to_string(),
-            labels: Vec::new(),
+            labels: vec![self.sandbox.label()],
             mounts,
             tmpfs_mounts,
             environment,
@@ -228,6 +253,10 @@ impl LaunchContext {
             remove_on_exit: true,
             extra_run_args: self.config.sandbox.podman_run_args.clone(),
             command,
+            detach_keys: match self.sandbox.topology {
+                Topology::SharedKernel => "",
+                Topology::VirtualMachine => REMOTE_DETACH_KEYS,
+            },
         };
         match role {
             LaunchRole::UserAssistant {
@@ -253,14 +282,14 @@ impl LaunchContext {
         &self,
         spec: &mut AgentContainerSpec,
         launch_id: &LaunchId,
-        bridge_binary: PathBuf,
+        bridge_binary: String,
     ) {
         spec.tty = true;
-        spec.labels = vec![
+        spec.labels.extend([
             (PROJECT_LABEL.to_string(), self.project_id.to_string()),
             (LAUNCH_LABEL.to_string(), launch_id.to_string()),
             (ROLE_LABEL.to_string(), USER_ASSISTANT_ROLE.to_string()),
-        ];
+        ]);
         for key in ["TERM", "COLORTERM", "TERM_PROGRAM"] {
             if let Ok(value) = std::env::var(key) {
                 spec.environment.push((key.to_string(), value));
@@ -274,7 +303,7 @@ impl LaunchContext {
             .push(("CLYEAN_ORCHESTRATOR_LEASE".to_string(), "1".to_string()));
         if let Some(herdr) = &self.herdr {
             spec.environment.extend(herdr.container_environment());
-            spec.mounts.extend(herdr.executable_mount());
+            spec.mounts.extend(herdr.executable_mount(self.host_paths));
         }
         spec.mounts.push(MountSpec::read_only(
             bridge_binary,
@@ -296,12 +325,15 @@ impl LaunchContext {
     }
 
     /// Arguments after `podman` that open the bridge session of a running User Assistant
-    /// container: the orchestrator channel always, the Herdr channel inside Herdr.
+    /// container: the orchestrator channel always, the Herdr channel inside Herdr.  The
+    /// session has no terminal, so no detach sequence applies to its binary stream; the
+    /// local client is still told to turn detaching off, which the remote one rejects.
     pub fn bridge_exec_args(&self, container_name: &str) -> Vec<String> {
-        let mut args = vec![
-            "exec".to_string(),
-            "--interactive".to_string(),
-            "--detach-keys=".to_string(),
+        let mut args = vec!["exec".to_string(), "--interactive".to_string()];
+        if self.sandbox.topology == Topology::SharedKernel {
+            args.push("--detach-keys=".to_string());
+        }
+        args.extend([
             container_name.to_string(),
             clyean_bridge::CONTAINER_PATH.to_string(),
             "bridge".to_string(),
@@ -312,7 +344,7 @@ impl LaunchContext {
                 "{}={ORCHESTRATOR_SOCKET_CONTAINER_PATH}",
                 clyean_bridge::ORCHESTRATOR_CHANNEL
             ),
-        ];
+        ]);
         if self.herdr.is_some() {
             args.push("--channel".to_string());
             args.push(format!(
@@ -441,7 +473,8 @@ pub fn cache_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clyean_project::{ProjectType, SandboxConfig};
+    use crate::roots::{SandboxRoots, SANDBOX_LABEL};
+    use clyean_project::{ProjectType, SandboxConfig, SandboxId};
     use std::path::Path;
 
     fn context(dir: &Path) -> LaunchContext {
@@ -474,13 +507,22 @@ mod tests {
                 socket_path: PathBuf::from("/tmp/herdr.sock"),
                 bin_path: None,
             }),
+            sandbox: SandboxRoots::beside_graph_root("/home/skyei/.local/share/containers/storage")
+                .location(
+                    SandboxId::try_from("3f9c2a7d1e4b8c05".to_string()).unwrap(),
+                    Topology::SharedKernel,
+                ),
+            host_paths: HostPathMapper::Identity,
+            git_settings: vec![("core.autocrlf".into(), "input".into())],
         }
     }
+
+    const ROOT: &str = "/home/skyei/.local/share/clyean/roots/3f9c2a7d1e4b8c05";
 
     fn user_assistant_role(launch: &str) -> LaunchRole {
         LaunchRole::UserAssistant {
             launch_id: LaunchId::generate(),
-            bridge_binary: PathBuf::from(launch),
+            bridge_binary: launch.to_string(),
         }
     }
 
@@ -501,6 +543,7 @@ mod tests {
         assert_eq!(
             spec.labels,
             vec![
+                (SANDBOX_LABEL.to_string(), "3f9c2a7d1e4b8c05".to_string()),
                 (PROJECT_LABEL.to_string(), context.project_id.to_string()),
                 (LAUNCH_LABEL.to_string(), launch.clone()),
                 (ROLE_LABEL.to_string(), USER_ASSISTANT_ROLE.to_string()),
@@ -526,6 +569,13 @@ mod tests {
             "CLYEAN_ORCHESTRATOR_SOCKET=/run/clyean/orchestrator.sock",
             "CLYEAN_ORCHESTRATOR_LEASE=1",
             "GIT_AUTHOR_NAME=Clyean User Assistant",
+            "GIT_CONFIG_COUNT=3",
+            "GIT_CONFIG_KEY_0=core.autocrlf",
+            "GIT_CONFIG_VALUE_0=input",
+            "GIT_CONFIG_KEY_1=safe.directory",
+            "GIT_CONFIG_VALUE_1=/home/skyei/workspace/workspace",
+            "GIT_CONFIG_KEY_2=safe.directory",
+            "GIT_CONFIG_VALUE_2=/home/skyei/workspace/workspace/proj",
             "type=bind,src=/home/skyei/.cache/clyean/bridge/clyean-bridge,dst=/usr/local/libexec/clyean/clyean-bridge,ro=true",
             "--memory",
         ] {
@@ -589,6 +639,29 @@ mod tests {
     }
 
     #[test]
+    fn a_podman_machine_gets_a_detach_sequence_its_remote_client_accepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = context(dir.path());
+        context.sandbox.topology = Topology::VirtualMachine;
+        let spec = context.agent_container_spec(
+            AgentId::UserAssistant,
+            user_assistant_role("/b"),
+            Vec::new(),
+        );
+        assert!(spec
+            .run_args()
+            .contains(&format!("--detach-keys={REMOTE_DETACH_KEYS}")));
+        assert!(!context
+            .bridge_exec_args("c")
+            .iter()
+            .any(|a| a.starts_with("--detach-keys")));
+        assert!(!spec
+            .environment
+            .iter()
+            .any(|(name, _)| name == "CLYEAN_HOST_CONTAINER_ROOT"));
+    }
+
+    #[test]
     fn host_variables_are_selected_by_exact_names_and_globs() {
         let host = vec![
             ("ANTHROPIC_API_KEY".to_string(), "k1".to_string()),
@@ -644,7 +717,6 @@ mod tests {
     fn every_container_exposes_at_most_its_own_profile() {
         let dir = tempfile::tempdir().unwrap();
         let context = context(dir.path());
-        let root = context.layout.container_root_dir();
         let masks = [
             "/home/skyei/.omp/profiles".to_string(),
             "/home/skyei/.omp/agent".to_string(),
@@ -672,7 +744,7 @@ mod tests {
             assert_eq!(
                 profiles,
                 [&MountSpec::read_write(
-                    root.join(format!("home/skyei/.omp/profiles/{}", agent.id())),
+                    format!("{ROOT}/home/skyei/.omp/profiles/{}", agent.id()),
                     format!("/home/skyei/.omp/profiles/{}", agent.id()),
                 )]
             );
@@ -704,7 +776,10 @@ mod tests {
         assert!(!spec.tty);
         assert!(spec.remove_on_exit);
         assert!(spec.name.ends_with("-programmer-0192awor"));
-        assert!(spec.labels.is_empty());
+        assert_eq!(
+            spec.labels,
+            [(SANDBOX_LABEL.to_string(), "3f9c2a7d1e4b8c05".to_string())]
+        );
         assert!(spec
             .tmpfs_mounts
             .contains(&"/home/skyei/.omp/profiles/programmer/run".to_string()));

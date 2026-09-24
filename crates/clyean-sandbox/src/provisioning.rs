@@ -11,8 +11,10 @@ use clyean_plantuml::{PlantUmlDistribution, PINNED_DISTRIBUTION};
 use sha2::{Digest, Sha256};
 
 use crate::container::HARNESS_CONTAINER_PATH;
+use crate::fs::{SandboxArchive, SandboxFs};
 use crate::podman::Podman;
 use crate::rootfs::RootfsMarker;
+use crate::roots::SandboxLocation;
 use crate::user::ContainerUser;
 use crate::{Result, SandboxError};
 
@@ -60,27 +62,27 @@ pub fn verification_script(distribution: &PlantUmlDistribution) -> String {
 #[derive(Debug, Clone)]
 pub struct RootfsRunner {
     podman: Podman,
-    root: PathBuf,
+    location: SandboxLocation,
 }
 
 impl RootfsRunner {
-    pub fn new(podman: Podman, root: impl Into<PathBuf>) -> Self {
-        Self {
-            podman,
-            root: root.into(),
-        }
+    pub fn new(podman: Podman, location: SandboxLocation) -> Self {
+        Self { podman, location }
     }
 }
 
 impl CommandRunner for RootfsRunner {
     fn run(&self, argv: &[String]) -> std::io::Result<CommandOutcome> {
+        let (label, value) = self.location.label();
         let mut args: Vec<String> = vec![
             "run".into(),
             "--rm".into(),
             "--init".into(),
+            "--label".into(),
+            format!("{label}={value}"),
             "--rootfs".into(),
+            self.location.root.clone(),
         ];
-        args.push(self.root.to_string_lossy().into_owned());
         args.extend(argv.iter().cloned());
         let output = self.podman.command(&args).output()?;
         Ok(CommandOutcome {
@@ -210,13 +212,19 @@ async fn download_release_asset(clyean_version: &str, asset: &str, target: &Path
             url: checksums_url.clone(),
             reason: format!("SHA256SUMS has no entry for {asset}"),
         })?;
-    download_to(&release_asset_url(clyean_version, asset), target).await?;
+    download_verified(&release_asset_url(clyean_version, asset), target, &expected).await
+}
+
+/// Downloads an executable to `target`, keeping it only when its SHA-256 digest is
+/// `expected`.
+pub async fn download_verified(url: &str, target: &Path, expected: &str) -> Result<()> {
+    download_to(url, target).await?;
     let actual = sha256_of(target)?;
-    if actual != expected {
+    if actual != expected.to_ascii_lowercase() {
         let _ = std::fs::remove_file(target);
         return Err(SandboxError::Checksum {
-            file: asset.to_string(),
-            expected,
+            file: url.rsplit('/').next().unwrap_or(url).to_string(),
+            expected: expected.to_string(),
             actual,
         });
     }
@@ -333,28 +341,30 @@ fn set_executable(_path: &Path) -> Result<()> {
 }
 
 /// Inputs of one provisioning run.
-#[derive(Debug, Clone)]
 pub struct ProvisioningInputs<'a> {
     pub podman: &'a Podman,
-    pub root: &'a Path,
+    pub location: &'a SandboxLocation,
+    pub fs: &'a dyn SandboxFs,
     pub user: &'a ContainerUser,
     pub image: &'a str,
     pub image_digest: &'a str,
     pub clyean_version: &'a str,
     pub plantuml_jar: &'a Path,
     pub harness_binary: &'a Path,
+    pub project_dir: &'a Path,
 }
 
 /// Installs everything into a populated root filesystem and writes the marker.
 pub fn provision(inputs: &ProvisioningInputs<'_>) -> Result<RootfsMarker> {
-    let runner = RootfsRunner::new(inputs.podman.clone(), inputs.root);
+    let runner = RootfsRunner::new(inputs.podman.clone(), inputs.location.clone());
     run_script(
         &runner,
         &base_packages_script(inputs.user),
         "installing base packages",
     )?;
-    install_plantuml(inputs.root, inputs.plantuml_jar)?;
-    install_harness(inputs.root, inputs.harness_binary)?;
+    inputs
+        .fs
+        .write(installation(inputs.plantuml_jar, inputs.harness_binary))?;
     let verification = run_script(
         &runner,
         &verification_script(&PINNED_DISTRIBUTION),
@@ -369,15 +379,19 @@ pub fn provision(inputs: &ProvisioningInputs<'_>) -> Result<RootfsMarker> {
         .next()
         .unwrap_or_default()
         .to_string();
+    let provisioned_at = clyean_project::utc_now_rfc3339();
     let marker = RootfsMarker {
+        sandbox_id: inputs.location.id.to_string(),
         image: inputs.image.to_string(),
         image_digest: inputs.image_digest.to_string(),
         provisioning_version: PROVISIONING_VERSION,
         clyean_version: inputs.clyean_version.to_string(),
-        provisioned_at: clyean_project::utc_now_rfc3339(),
+        provisioned_at: provisioned_at.clone(),
         harness_version,
+        project_dir: inputs.project_dir.to_string_lossy().into_owned(),
+        last_used_at: provisioned_at,
     };
-    marker.write(inputs.root)?;
+    marker.write(inputs.fs)?;
     Ok(marker)
 }
 
@@ -395,43 +409,15 @@ fn run_script(runner: &RootfsRunner, script: &str, context: &str) -> Result<Stri
     Ok(outcome.stdout)
 }
 
-fn install_plantuml(root: &Path, jar: &Path) -> Result<()> {
+/// The pinned PlantUML jar with its stable link, and the harness binary.
+fn installation(jar: &Path, harness: &Path) -> SandboxArchive {
     let distribution = &PINNED_DISTRIBUTION;
-    let install_dir = root.join("opt").join("plantuml");
-    std::fs::create_dir_all(&install_dir)
-        .map_err(|e| SandboxError::io(format!("creating {}", install_dir.display()), e))?;
-    let target = install_dir.join(distribution.jar_file_name());
-    std::fs::copy(jar, &target)
-        .map_err(|e| SandboxError::io(format!("installing {}", target.display()), e))?;
-    let link = install_dir.join("plantuml.jar");
-    let _ = std::fs::remove_file(&link);
-    symlink(&distribution.jar_file_name(), &link)
-}
-
-fn install_harness(root: &Path, binary: &Path) -> Result<()> {
-    let target = root.join("usr").join("local").join("bin").join("clyean");
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| SandboxError::io(format!("creating {}", parent.display()), e))?;
-    }
-    std::fs::copy(binary, &target).map_err(|e| {
-        SandboxError::io(format!("installing the harness at {}", target.display()), e)
-    })?;
-    set_executable(&target)
-}
-
-#[cfg(unix)]
-fn symlink(target: &str, link: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(target, link)
-        .map_err(|e| SandboxError::io(format!("linking {}", link.display()), e))
-}
-
-#[cfg(not(unix))]
-fn symlink(target: &str, link: &Path) -> Result<()> {
-    let source = link.with_file_name(target);
-    std::fs::copy(source, link)
-        .map(|_| ())
-        .map_err(|e| SandboxError::io(format!("copying {}", link.display()), e))
+    let mut archive = SandboxArchive::new();
+    archive.directory("/opt/plantuml", 0o755);
+    archive.host_file(&distribution.sandbox_jar_path(), jar, 0o644);
+    archive.symlink("/opt/plantuml/plantuml.jar", &distribution.jar_file_name());
+    archive.host_file(HARNESS_CONTAINER_PATH, harness, 0o755);
+    archive
 }
 
 #[cfg(test)]
@@ -475,22 +461,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn installs_plantuml_and_harness_into_the_root() {
+        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         let jar = source.path().join("plantuml.jar");
         let harness = source.path().join("harness");
         std::fs::write(&jar, b"jar").unwrap();
         std::fs::write(&harness, b"#!/bin/sh\necho clyean/1\n").unwrap();
-        install_plantuml(root.path(), &jar).unwrap();
-        install_harness(root.path(), &harness).unwrap();
+        crate::fs::HostDirectoryFs::new(root.path())
+            .write(installation(&jar, &harness))
+            .unwrap();
         assert!(root
             .path()
             .join("opt/plantuml/plantuml-mit-1.2026.8.jar")
             .is_file());
-        assert!(root.path().join("opt/plantuml/plantuml.jar").exists());
-        assert!(root.path().join("usr/local/bin/clyean").is_file());
+        assert_eq!(
+            std::fs::read_link(root.path().join("opt/plantuml/plantuml.jar")).unwrap(),
+            Path::new("plantuml-mit-1.2026.8.jar")
+        );
+        let harness_mode = std::fs::metadata(root.path().join("usr/local/bin/clyean"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(harness_mode & 0o777, 0o755);
     }
 
     #[tokio::test]

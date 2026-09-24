@@ -134,16 +134,22 @@ pub struct SandboxArgs {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum SandboxAction {
-    /// Show whether the sandbox root filesystem is provisioned and with what.
+    /// Show the project's sandbox identifier and location, what provisioned it, and its
+    /// running User Assistants.
     Status,
     /// Populate and provision the sandbox root filesystem if it is missing or outdated.
     Build,
-    /// Discard the sandbox root filesystem and provision it again.
+    /// Discard the sandbox root filesystem and provision it again, unless it is in use.
     Rebuild,
     /// Open an interactive shell inside the sandbox.
     Shell,
-    /// Remove User Assistant containers, in every project, whose clyean process is gone.
-    Prune,
+    /// Remove User Assistant containers, in every project, whose clyean process is gone,
+    /// and list sandbox root filesystems whose project is gone.
+    Prune {
+        /// Also remove the orphaned sandbox root filesystems.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[cfg(test)]
@@ -185,6 +191,13 @@ mod tests {
             cli.command,
             Some(Command::Sandbox(SandboxArgs {
                 action: SandboxAction::Rebuild
+            }))
+        ));
+        let cli = Cli::try_parse_from(["clyean", "sandbox", "prune", "--remove"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Sandbox(SandboxArgs {
+                action: SandboxAction::Prune { remove: true }
             }))
         ));
     }

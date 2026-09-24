@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clyean_agents::AgentId;
 use clyean_bridge::host::{self as bridge_host, ConnectFuture, Connector, LocalStream};
-use clyean_orchestrator::scaffold::{prepare_host_files, project_agent_profiles, PendingScaffold};
+use clyean_orchestrator::scaffold::{prepare_host_files, refresh_sandbox_files, PendingScaffold};
 use clyean_orchestrator::server::handle_connection;
 use clyean_orchestrator::service::{
     OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
@@ -21,7 +21,7 @@ use clyean_orchestrator::service::{
 use clyean_orchestrator::CredentialAuthority;
 use clyean_project::{LaunchId, PlanCatalog, ProjectId};
 use clyean_sandbox::launch::{PROJECT_LABEL, ROLE_LABEL, USER_ASSISTANT_ROLE};
-use clyean_sandbox::{AgentContainerSpec, LaunchContext, LaunchRole, Podman};
+use clyean_sandbox::{AgentContainerSpec, Helpers, LaunchContext, LaunchRole, Podman, Topology};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, Command};
 
@@ -48,22 +48,28 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
         );
     }
     let sandbox = runtime.sandbox_config(&pending)?;
-    let (marker, provisioned) = runtime.ensure_sandbox(&sandbox).await?;
+    let podman_sandbox = runtime.podman_sandbox()?;
+    let (marker, provisioned) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
     if provisioned {
         eprintln!(
             "Provisioned the Podman sandbox (harness {}).",
             marker.harness_version
         );
     }
-    project_agent_profiles(&runtime.layout, &runtime.user)?;
-    let bridge_binary = runtime.resolve_bridge_binary().await?;
+    refresh_sandbox_files(
+        &runtime.layout,
+        &runtime.user,
+        podman_sandbox.location.fs(&runtime.podman).as_ref(),
+        marker,
+    )?;
+    let bridge_binary = runtime.resolve_bridge_binary(&podman_sandbox).await?;
 
     let config = if runtime.is_scaffolded() {
         runtime.load_config()?
     } else {
         runtime.provisional_config(&pending)
     };
-    let context = runtime.launch_context(config.clone());
+    let mut context = runtime.launch_context(config.clone(), &podman_sandbox);
     let renderer = Arc::new(SandboxRenderer::new(context.clone()));
     let credentials = Arc::new(CredentialAuthority::default());
     let factory = Arc::new(SandboxSessionFactory::new(
@@ -102,9 +108,23 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
         launch_id: LaunchId::generate(),
         bridge_binary,
     };
+    context.herdr = runtime.container_herdr(&podman_sandbox).await;
     let harness_args = user_assistant_harness_args(&context, &args);
     let mut spec = context.agent_container_spec(AgentId::UserAssistant, role, harness_args);
     spec.tty = !args.print;
+    if podman_sandbox.environment.topology == Topology::VirtualMachine {
+        let host_sources: Vec<String> = spec
+            .mounts
+            .iter()
+            .map(|mount| mount.source.clone())
+            .filter(|source| !source.starts_with(&podman_sandbox.location.root))
+            .collect();
+        Helpers::new(
+            runtime.podman.clone(),
+            podman_sandbox.environment.sandbox_roots(),
+        )
+        .check_visible(&host_sources)?;
+    }
     let connector = Arc::new(LaunchConnector {
         service,
         herdr_socket: runtime
@@ -349,11 +369,22 @@ impl LaunchConnector {
         Ok(Box::new(stream))
     }
 
-    #[cfg(not(unix))]
+    /// Herdr on native Windows listens on a named pipe.
+    #[cfg(windows)]
+    async fn herdr_stream(&self) -> io::Result<Box<dyn LocalStream>> {
+        let path = self
+            .herdr_socket
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not inside a Herdr pane"))?;
+        let pipe = tokio::net::windows::named_pipe::ClientOptions::new().open(path)?;
+        Ok(Box::new(pipe))
+    }
+
+    #[cfg(not(any(unix, windows)))]
     async fn herdr_stream(&self) -> io::Result<Box<dyn LocalStream>> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "the Herdr channel is not available on this platform yet",
+            "the Herdr channel is not available on this platform",
         ))
     }
 }

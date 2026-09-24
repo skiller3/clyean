@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clyean_agents::profile::{host_profile_dir, CREDENTIALS_BUNDLE_FILE_NAME};
+use clyean_agents::profile::container_credentials_bundle_path;
 use clyean_agents::{AgentId, AgentNeeds};
 use clyean_harness::session::BoxFuture;
 use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession, UiRequestHandler};
@@ -19,14 +19,19 @@ use clyean_orchestrator::agents::AgentSessionFactory;
 use clyean_orchestrator::credentials::{plan_delivery, CredentialRenewals, Delivery};
 use clyean_orchestrator::scaffold::{ensure_sandbox, PendingScaffold, SandboxInputs};
 use clyean_orchestrator::service::DiagramRenderer;
-use clyean_orchestrator::{CredentialAuthority, OrchestratorError};
+use clyean_orchestrator::CredentialAuthority;
 use clyean_plantuml::render::render_directory;
 use clyean_plantuml::RenderReport;
-use clyean_project::{ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig};
+use clyean_project::{
+    ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig, SandboxId,
+};
 use clyean_sandbox::launch::{cache_dir, BUILTIN_PASSTHROUGH_PATTERNS};
 use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
-use clyean_sandbox::{ContainerUser, HerdrHostContext, LaunchContext, LaunchRole, Podman};
+use clyean_sandbox::{
+    ContainerUser, HerdrHostContext, HostOs, HostPathMapper, LaunchContext, LaunchRole, Podman,
+    PodmanEnvironment, SandboxArchive, SandboxLocation, Topology,
+};
 
 use crate::cli::{ProjectArgs, YesNo, VERSION};
 
@@ -116,9 +121,36 @@ impl ProjectRuntime {
         }
     }
 
-    pub async fn ensure_sandbox(&self, sandbox: &SandboxConfig) -> Result<(RootfsMarker, bool)> {
+    /// Asks Podman about its environment, stops when Podman is older than this platform
+    /// supports, prints its warnings, and locates the project's sandbox root filesystem,
+    /// recording a sandbox identifier when the project has none.
+    pub fn podman_sandbox(&self) -> Result<PodmanSandbox> {
+        let host = HostOs::current();
+        let environment = PodmanEnvironment::detect(&self.podman, host)
+            .context("asking Podman about its environment")?;
+        for warning in environment.check(host)? {
+            eprintln!("warning: {warning}");
+        }
+        let id = SandboxId::load_or_create(&self.layout)?;
+        let location = environment
+            .sandbox_roots()
+            .location(id, environment.topology);
+        Ok(PodmanSandbox {
+            host_paths: HostPathMapper::new(environment.topology, host),
+            environment,
+            location,
+        })
+    }
+
+    pub async fn ensure_sandbox(
+        &self,
+        podman_sandbox: &PodmanSandbox,
+        sandbox: &SandboxConfig,
+    ) -> Result<(RootfsMarker, bool)> {
         let inputs = SandboxInputs {
             podman: &self.podman,
+            environment: &podman_sandbox.environment,
+            location: &podman_sandbox.location,
             layout: &self.layout,
             user: &self.user,
             sandbox,
@@ -130,7 +162,11 @@ impl ProjectRuntime {
             .context("preparing the sandbox root filesystem")
     }
 
-    pub fn launch_context(&self, config: ProjectConfig) -> LaunchContext {
+    pub fn launch_context(
+        &self,
+        config: ProjectConfig,
+        podman_sandbox: &PodmanSandbox,
+    ) -> LaunchContext {
         LaunchContext {
             podman: self.podman.clone(),
             directory: self.directory.clone(),
@@ -140,27 +176,56 @@ impl ProjectRuntime {
             user: self.user.clone(),
             clyean_version: VERSION.to_string(),
             herdr: self.herdr.clone(),
+            sandbox: podman_sandbox.location.clone(),
+            host_paths: podman_sandbox.host_paths,
+            git_settings: ["core.autocrlf", "core.eol"]
+                .into_iter()
+                .filter_map(|key| {
+                    clyean_git::host_setting(key).map(|value| (key.to_string(), value))
+                })
+                .collect(),
         }
+    }
+
+    /// The Herdr context for the User Assistant's container.  On a Podman machine, the
+    /// host's own `herdr` cannot run in a Linux container, so its Linux build replaces it,
+    /// or no executable is mounted when that build cannot be fetched.
+    pub async fn container_herdr(
+        &self,
+        podman_sandbox: &PodmanSandbox,
+    ) -> Option<HerdrHostContext> {
+        let mut herdr = self.herdr.clone()?;
+        if podman_sandbox.environment.topology != Topology::VirtualMachine {
+            return Some(herdr);
+        }
+        let host_bin = herdr.bin_path.take()?;
+        let Some(version) = clyean_sandbox::herdr::host_version(&host_bin) else {
+            return Some(herdr);
+        };
+        let arch = podman_sandbox.environment.arch_tag().ok()?;
+        match clyean_sandbox::herdr::linux_cli(&version, arch, &self.cache_dir).await {
+            Ok(path) => herdr.bin_path = Some(path),
+            Err(error) => eprintln!(
+                "warning: the Herdr CLI is not available inside the User Assistant's container ({error})"
+            ),
+        }
+        Some(herdr)
     }
 
     /// The host copy of the bridge for the architecture of the kernel that runs the
     /// containers, which the User Assistant's container mounts read-only.
-    pub async fn resolve_bridge_binary(&self) -> Result<PathBuf> {
-        let host = self
-            .podman
-            .host_info()
-            .context("asking Podman for the architecture of its containers")?;
+    pub async fn resolve_bridge_binary(&self, podman_sandbox: &PodmanSandbox) -> Result<String> {
         let bridge = resolve_sandbox_executable(
             &BRIDGE,
             None,
             VERSION,
-            host.harness_arch_tag()?,
+            podman_sandbox.environment.arch_tag()?,
             &self.cache_dir,
         )
         .await
         .context("finding the bridge executable")?;
         tracing::info!(target: "clyean::launch", bridge = %bridge.path.display(), origin = ?bridge.origin, "bridge executable");
-        Ok(bridge.path)
+        Ok(podman_sandbox.host_paths.map(&bridge.path))
     }
 
     /// A configuration usable before the project is scaffolded, for maintenance containers.
@@ -173,6 +238,15 @@ impl ProjectRuntime {
             pending.sandbox.clone(),
         )
     }
+}
+
+/// What Podman reported about itself and where the project's sandbox lives on the Podman
+/// host.
+#[derive(Debug, Clone)]
+pub struct PodmanSandbox {
+    pub environment: PodmanEnvironment,
+    pub location: SandboxLocation,
+    pub host_paths: HostPathMapper,
 }
 
 fn ask_worktree_question() -> Result<bool> {
@@ -255,23 +329,17 @@ impl SandboxSessionFactory {
         agent: AgentId,
         bundle: &serde_json::Value,
     ) -> clyean_orchestrator::Result<()> {
-        let dir = host_profile_dir(
-            &self.context.layout.container_root_dir(),
-            self.context.user.name(),
-            agent,
+        let mut archive = SandboxArchive::new();
+        archive.file(
+            &container_credentials_bundle_path(self.context.user.name(), agent),
+            bundle.to_string(),
+            0o600,
         );
-        let path = dir.join(CREDENTIALS_BUNDLE_FILE_NAME);
-        let context = format!("writing {}", path.display());
-        std::fs::create_dir_all(&dir).map_err(|e| OrchestratorError::io(&context, e))?;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options
-            .open(&path)
-            .map_err(|e| OrchestratorError::io(&context, e))?;
-        std::io::Write::write_all(&mut file, bundle.to_string().as_bytes())
-            .map_err(|e| OrchestratorError::io(&context, e))
+        self.context
+            .sandbox
+            .fs(&self.context.podman)
+            .write(archive)?;
+        Ok(())
     }
 }
 

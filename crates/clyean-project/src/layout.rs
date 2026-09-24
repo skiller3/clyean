@@ -11,7 +11,7 @@ pub const AGENTS_DIR_NAME: &str = "agents";
 pub const ARCHITECTURE_DIR_NAME: &str = "architecture";
 pub const SPECS_FILE_NAME: &str = "SPECS.md";
 pub const PLANS_DIR_NAME: &str = "plans";
-pub const CONTAINER_ROOT_DIR_NAME: &str = "container-root";
+pub const SANDBOX_IDENTITY_FILE_NAME: &str = "sandbox.local.json";
 pub const LOCK_FILE_NAME: &str = "lock";
 pub const WORK_DIR_NAME: &str = "work";
 pub const LOGS_DIR_NAME: &str = "logs";
@@ -61,8 +61,9 @@ impl ProjectLayout {
         self.clyean_dir().join(PLANS_DIR_NAME)
     }
 
-    pub fn container_root_dir(&self) -> PathBuf {
-        self.clyean_dir().join(CONTAINER_ROOT_DIR_NAME)
+    /// The local-only file holding the identifier of the project's sandbox.
+    pub fn sandbox_identity_path(&self) -> PathBuf {
+        self.clyean_dir().join(SANDBOX_IDENTITY_FILE_NAME)
     }
 
     pub fn lock_path(&self) -> PathBuf {
@@ -113,8 +114,8 @@ mod tests {
             PathBuf::from("/tmp/example/.clyean/SPECS.md")
         );
         assert_eq!(
-            layout.container_root_dir(),
-            PathBuf::from("/tmp/example/.clyean/container-root")
+            layout.sandbox_identity_path(),
+            PathBuf::from("/tmp/example/.clyean/sandbox.local.json")
         );
         assert_eq!(
             layout.lock_path(),
