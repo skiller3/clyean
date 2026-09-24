@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/clyean",
     "crates/clyean-agents",
+    "crates/clyean-bridge",
     "crates/clyean-git",
     "crates/clyean-harness",
     "crates/clyean-orchestrator",
@@ -22,6 +23,7 @@ authors = ["Skye Isard <skye.isard@gmail.com>"]
 
 [workspace.dependencies]
 clyean-agents = { path = "crates/clyean-agents" }
+clyean-bridge = { path = "crates/clyean-bridge" }
 clyean-git = { path = "crates/clyean-git" }
 clyean-harness = { path = "crates/clyean-harness" }
 clyean-orchestrator = { path = "crates/clyean-orchestrator" }
