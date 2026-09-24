@@ -14,7 +14,9 @@ use clyean_project::SandboxId;
 use serde::Deserialize;
 
 use crate::environment::Topology;
-use crate::fs::{HostDirectoryFs, PodmanHostFs, SandboxFs};
+#[cfg(unix)]
+use crate::fs::HostDirectoryFs;
+use crate::fs::{PodmanHostFs, SandboxFs};
 use crate::podman::Podman;
 use crate::{Result, SandboxError};
 
