@@ -20,7 +20,7 @@ Every other agent container gets none of this, and the reporter extension is ins
 
 ## The sandboxing exception
 
-Clyean's sandbox promise is that agents cannot modify anything outside the workspace mount.  The Herdr socket is an explicit exception: it grants the User Assistant the full Herdr socket API, unfiltered, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, `agent.start`) and control of panes that do not belong to the project.  An instruction that convinces the User Assistant to use the `herdr` executable or the socket can therefore affect your other panes.  Treat the User Assistant inside Herdr with the same trust you give any agent you run directly in a Herdr pane.  The other route out of the sandbox is remote repository access by the Product Director agent, which is not implemented yet.
+Clyean's sandbox promise is that agents cannot modify anything outside the workspace mount.  The Herdr socket is an explicit exception: it grants the User Assistant the full Herdr socket API, unfiltered, including workspace, tab, and pane mutation (`pane.split`, `pane.send_input`, `pane.run`, `agent.start`) and control of panes that do not belong to the project.  An instruction that convinces the User Assistant to use the `herdr` executable or the socket can therefore affect your other panes.  Treat the User Assistant inside Herdr with the same trust you give any agent you run directly in a Herdr pane.  The other route out of the sandbox is remote repository access by the Software Engineering Director agent, which is not implemented yet.
 
 ## What the sidebar shows
 

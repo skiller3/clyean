@@ -83,6 +83,6 @@ Every commit made by Clyean, whether by deterministic logic on the host or by an
 Two features deliberately let an agent affect state outside the workspace mount and are documented as such:
 
 1. The Herdr socket mounted into the User Assistant container grants the full Herdr socket API, including workspace, tab, and pane mutation and control of panes that do not belong to the project.
-2. Remote repository access by the Product Director agent, once that agent is specified.
+2. Remote repository access by the Software Engineering Director agent, once it is implemented.
 
 No other mount is writable, and no other socket is mounted.
