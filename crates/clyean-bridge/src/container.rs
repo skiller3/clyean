@@ -89,13 +89,27 @@ pub fn connect(path: &Path) -> io::Result<()> {
     let socket = UnixStream::connect(path)?;
     let mut to_socket = socket.try_clone()?;
     std::thread::spawn(move || {
-        let _ = io::copy(&mut io::stdin().lock(), &mut to_socket);
+        let _ = relay(&mut io::stdin().lock(), &mut to_socket);
         let _ = to_socket.shutdown(Shutdown::Write);
     });
     let mut from_socket = &socket;
-    let mut stdout = io::stdout().lock();
-    io::copy(&mut from_socket, &mut stdout)?;
-    stdout.flush()
+    relay(&mut from_socket, &mut io::stdout().lock())
+}
+
+/// Copies until the end of `input`, flushing every chunk so that nothing waits in a buffer
+/// (standard output would otherwise hold whole lines, or more, until it fills).
+fn relay(input: &mut impl Read, output: &mut impl Write) -> io::Result<()> {
+    let mut buffer = [0u8; 8192];
+    loop {
+        let n = match input.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        output.write_all(&buffer[..n])?;
+        output.flush()?;
+    }
 }
 
 /// The shared state of one bridge session.

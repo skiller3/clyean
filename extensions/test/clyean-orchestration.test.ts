@@ -429,7 +429,7 @@ test("the lease shuts the harness down when the clyean process that started it g
 	expect(recorder.shutdowns).toBe(0);
 	server.dropConnections();
 	await waitFor(() => recorder.shutdowns === 1, 2000, "the shutdown");
-	expect(recorder.notifications.at(-1)?.message).toContain("is gone");
+	expect(recorder.notifications.at(-1)?.message).toContain("connection to the clyean process");
 });
 
 test("a lease that cannot reach the orchestrator shuts the harness down when the session starts", async () => {

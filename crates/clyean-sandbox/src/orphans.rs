@@ -43,11 +43,25 @@ impl UserAssistantContainer {
     }
 }
 
-/// Every User Assistant container of every project, running or not.
-pub fn list_user_assistant_containers(podman: &Podman) -> Result<Vec<UserAssistantContainer>> {
-    let label = format!("label={ROLE_LABEL}={USER_ASSISTANT_ROLE}");
-    let text = podman.output(["ps", "--all", "--filter", &label, "--format", "json"])?;
-    parse_container_list(&text)
+/// The User Assistant containers, running or not, that carry every `KEY=VALUE` label in
+/// `labels` (none selects every project's).
+pub fn list_user_assistant_containers(
+    podman: &Podman,
+    labels: &[String],
+) -> Result<Vec<UserAssistantContainer>> {
+    let mut args = vec![
+        "ps".to_string(),
+        "--all".to_string(),
+        "--filter".to_string(),
+        format!("label={ROLE_LABEL}={USER_ASSISTANT_ROLE}"),
+    ];
+    for label in labels {
+        args.push("--filter".to_string());
+        args.push(format!("label={label}"));
+    }
+    args.push("--format".to_string());
+    args.push("json".to_string());
+    parse_container_list(&podman.output(args)?)
 }
 
 pub fn parse_container_list(text: &str) -> Result<Vec<UserAssistantContainer>> {
@@ -73,13 +87,14 @@ pub fn lists_a_bridge(listing: &str) -> bool {
     })
 }
 
-/// The containers old enough to judge that are stopped or have no bridge.
+/// The containers at least `minimum_age` old that are stopped or have no bridge.
 pub fn select_orphans(
     containers: &[UserAssistantContainer],
     now_unix: i64,
+    minimum_age: Duration,
     mut has_bridge: impl FnMut(&UserAssistantContainer) -> bool,
 ) -> Vec<&UserAssistantContainer> {
-    let minimum_age = MINIMUM_AGE.as_secs() as i64;
+    let minimum_age = minimum_age.as_secs() as i64;
     containers
         .iter()
         .filter(|container| now_unix - container.created >= minimum_age)
@@ -89,12 +104,22 @@ pub fn select_orphans(
 
 /// Removes every orphaned User Assistant container and returns their names.
 pub fn prune_orphaned_user_assistants(podman: &Podman) -> Result<Vec<String>> {
-    let containers = list_user_assistant_containers(podman)?;
+    prune_matching(podman, &[], MINIMUM_AGE)
+}
+
+/// Removes the orphaned User Assistant containers that carry every label in `labels`,
+/// judging age against `minimum_age`, and returns their names.
+pub fn prune_matching(
+    podman: &Podman,
+    labels: &[String],
+    minimum_age: Duration,
+) -> Result<Vec<String>> {
+    let containers = list_user_assistant_containers(podman, labels)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or_default();
-    let orphans = select_orphans(&containers, now, |container| {
+    let orphans = select_orphans(&containers, now, minimum_age, |container| {
         // A container whose processes cannot be listed is left alone.
         has_running_bridge(podman, &container.id).unwrap_or(true)
     });
@@ -150,7 +175,9 @@ mod tests {
             container("old-exited", "exited", now - 600),
             container("young-created", "created", now - 5),
         ];
-        let orphans = select_orphans(&containers, now, |c| c.name() == "old-with-bridge");
+        let orphans = select_orphans(&containers, now, MINIMUM_AGE, |c| {
+            c.name() == "old-with-bridge"
+        });
         let names: Vec<&str> = orphans.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["old-without-bridge", "old-exited"]);
     }

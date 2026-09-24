@@ -175,10 +175,12 @@ async fn run_user_assistant(
         .args(spec.run_args())
         .spawn()
         .context("starting the User Assistant's container")?;
+    tracing::debug!(target: "clyean::launch", container = %spec.name, "container starting");
     if !wait_until_running(podman, &spec.name, &mut container).await? {
         let status = container.wait().await?;
         return Ok(status.code().unwrap_or(1));
     }
+    tracing::debug!(target: "clyean::launch", container = %spec.name, "container running");
     let bridge = match open_bridge(context, &spec.name, connector).await {
         Ok(bridge) => bridge,
         Err(error) => {
@@ -267,10 +269,12 @@ async fn open_bridge(
     ) else {
         return Err(anyhow!("the bridge session has no standard streams"));
     };
+    // Podman reports the session's end when the container goes first, which is the normal
+    // end of every launch, so the session's messages are informational.
     tokio::spawn(async move {
         let mut lines = tokio::io::BufReader::new(errors).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            tracing::warn!(target: "clyean::bridge", "{line}");
+            tracing::info!(target: "clyean::bridge", "{line}");
         }
     });
     let (introduced, version) = tokio::sync::oneshot::channel();

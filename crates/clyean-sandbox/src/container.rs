@@ -158,9 +158,11 @@ impl AgentContainerSpec {
             args.push("--mount".into());
             args.push(mount.podman_argument());
         }
+        // Without notmpcopyup, Podman copies whatever the root filesystem holds at the path
+        // into memory: for the mask over the in-project root filesystem, all of it.
         for path in &self.tmpfs_mounts {
             args.push("--mount".into());
-            args.push(format!("type=tmpfs,dst={path}"));
+            args.push(format!("type=tmpfs,dst={path},notmpcopyup"));
         }
         for (key, value) in &self.environment {
             args.push("--env".into());
@@ -243,7 +245,7 @@ mod tests {
             "clyean.role=user-assistant",
             "type=bind,src=/host/data,dst=/mnt/data,ro=true",
             "type=bind,src=/host/p,dst=/home/skyei/workspace/p",
-            "type=tmpfs,dst=/home/skyei/workspace/p/.clyean/container-root",
+            "type=tmpfs,dst=/home/skyei/workspace/p/.clyean/container-root,notmpcopyup",
             "CLYEAN_AGENT=programmer",
             "--memory",
         ] {

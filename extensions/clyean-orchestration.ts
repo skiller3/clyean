@@ -320,7 +320,7 @@ export function holdOrchestratorLease(socketPath: string): OrchestratorLease {
 		}
 	});
 	socket.on("error", () => {});
-	socket.on("close", () => lose("the clyean process that started this container is gone"));
+	socket.on("close", () => lose("its connection to the clyean process that started this container ended"));
 	return lease;
 }
 
