@@ -13,7 +13,7 @@ pub mod local_overlay;
 pub mod lock;
 pub mod plans;
 
-pub use config::{ProjectConfig, ProjectType, SandboxConfig};
+pub use config::{PassthroughEntry, ProjectConfig, ProjectType, SandboxConfig};
 pub use discovery::ProjectDirectory;
 pub use identity::{LaunchId, ProjectId};
 pub use layout::ProjectLayout;

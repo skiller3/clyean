@@ -66,7 +66,7 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
             git,
             pending,
             renderer: Arc::new(SandboxRenderer::new(context.clone())),
-            factory: Arc::new(SandboxSessionFactory::new(context)),
+            factory: Arc::new(SandboxSessionFactory::new(context, Arc::default())),
             clyean_version: crate::cli::VERSION.to_string(),
         })),
         crate::cli::VERSION,

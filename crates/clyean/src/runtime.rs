@@ -5,20 +5,25 @@
 //! context, and the production implementations of the orchestrator's dependencies
 //! (diagram rendering and sub-agent sessions inside Podman containers).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clyean_agents::AgentId;
+use clyean_agents::profile::{host_profile_dir, CREDENTIALS_BUNDLE_FILE_NAME};
+use clyean_agents::{AgentId, AgentNeeds};
 use clyean_harness::session::BoxFuture;
-use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession};
+use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession, UiRequestHandler};
 use clyean_orchestrator::agents::AgentSessionFactory;
+use clyean_orchestrator::credentials::{plan_delivery, CredentialRenewals, Delivery};
 use clyean_orchestrator::scaffold::{ensure_sandbox, PendingScaffold, SandboxInputs};
 use clyean_orchestrator::service::DiagramRenderer;
+use clyean_orchestrator::{CredentialAuthority, OrchestratorError};
 use clyean_plantuml::render::render_directory;
 use clyean_plantuml::RenderReport;
 use clyean_project::{ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig};
-use clyean_sandbox::launch::cache_dir;
+use clyean_sandbox::launch::{cache_dir, BUILTIN_PASSTHROUGH_PATTERNS};
 use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{ContainerUser, HerdrHostContext, LaunchContext, LaunchRole, Podman};
@@ -219,14 +224,54 @@ impl DiagramRenderer for SandboxRenderer {
     }
 }
 
-/// Opens sub-agent sessions as harness processes in their own sandbox containers.
+/// Opens sub-agent sessions as harness processes in their own sandbox containers, each
+/// with the credential copies and host variables it needs.
 pub struct SandboxSessionFactory {
     context: LaunchContext,
+    credentials: Arc<CredentialAuthority>,
 }
 
 impl SandboxSessionFactory {
-    pub fn new(context: LaunchContext) -> Self {
-        Self { context }
+    pub fn new(context: LaunchContext, credentials: Arc<CredentialAuthority>) -> Self {
+        Self {
+            context,
+            credentials,
+        }
+    }
+
+    async fn delivery(&self, agent: AgentId) -> clyean_orchestrator::Result<Delivery> {
+        if !self.credentials.is_connected() {
+            tracing::info!(target: "clyean::credentials", agent = agent.id(), "no User Assistant is running, so the agent receives the host's provider variables and no credential copies");
+            return Ok(Delivery::without_authority(BUILTIN_PASSTHROUGH_PATTERNS));
+        }
+        let needs = AgentNeeds::for_agent(&self.context.layout, agent)?;
+        let host_variables: HashSet<String> = std::env::vars().map(|(name, _)| name).collect();
+        plan_delivery(&self.credentials, agent, &needs, &host_variables).await
+    }
+
+    /// Writes the bundle into the agent's own profile, readable by its owner only.
+    fn write_bundle(
+        &self,
+        agent: AgentId,
+        bundle: &serde_json::Value,
+    ) -> clyean_orchestrator::Result<()> {
+        let dir = host_profile_dir(
+            &self.context.layout.container_root_dir(),
+            self.context.user.name(),
+            agent,
+        );
+        let path = dir.join(CREDENTIALS_BUNDLE_FILE_NAME);
+        let context = format!("writing {}", path.display());
+        std::fs::create_dir_all(&dir).map_err(|e| OrchestratorError::io(&context, e))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options
+            .open(&path)
+            .map_err(|e| OrchestratorError::io(&context, e))?;
+        std::io::Write::write_all(&mut file, bundle.to_string().as_bytes())
+            .map_err(|e| OrchestratorError::io(&context, e))
     }
 }
 
@@ -238,18 +283,36 @@ impl AgentSessionFactory for SandboxSessionFactory {
         resume_session_file: Option<&'a str>,
     ) -> BoxFuture<'a, clyean_orchestrator::Result<Box<dyn AgentSessionDriver>>> {
         Box::pin(async move {
-            let args = self
+            let delivery = self.delivery(agent).await?;
+            self.write_bundle(agent, &delivery.bundle)?;
+            let mut args = self
                 .context
                 .sub_agent_harness_args(agent, resume_session_file);
+            if let Some(model) = &delivery.model {
+                args.push("--model".to_string());
+                args.push(model.clone());
+            }
             let role = LaunchRole::SubAgent {
                 work_id: work_id.to_string(),
+                secrets: delivery.secrets.clone(),
             };
             let spec = self.context.agent_container_spec(agent, role, args);
             let _ = self.context.podman.remove_container(&spec.name);
             let mut command = tokio::process::Command::new(self.context.podman.binary());
             command.args(spec.run_args());
-            tracing::info!(target: "clyean::launch", agent = agent.id(), container = %spec.name, "starting sub-agent");
-            let client = HarnessClient::spawn(command, HARNESS_READY_TIMEOUT).await?;
+            let renewals: Option<Arc<dyn UiRequestHandler>> =
+                self.credentials.is_connected().then(|| {
+                    Arc::new(CredentialRenewals {
+                        authority: self.credentials.clone(),
+                        agent,
+                        providers: delivery.providers.clone(),
+                        mcp_servers: delivery.mcp_servers.clone(),
+                    }) as Arc<dyn UiRequestHandler>
+                });
+            tracing::info!(target: "clyean::launch", agent = agent.id(), container = %spec.name, model = ?delivery.model, "starting sub-agent");
+            let client =
+                HarnessClient::spawn_with_ui_handler(command, HARNESS_READY_TIMEOUT, renewals)
+                    .await?;
             Ok(
                 Box::new(HarnessSession::new(client, SUB_AGENT_TURN_TIMEOUT))
                     as Box<dyn AgentSessionDriver>,

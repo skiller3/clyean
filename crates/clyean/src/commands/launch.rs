@@ -18,6 +18,7 @@ use clyean_orchestrator::server::handle_connection;
 use clyean_orchestrator::service::{
     OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
 };
+use clyean_orchestrator::CredentialAuthority;
 use clyean_project::{LaunchId, PlanCatalog, ProjectId};
 use clyean_sandbox::launch::{PROJECT_LABEL, ROLE_LABEL, USER_ASSISTANT_ROLE};
 use clyean_sandbox::{AgentContainerSpec, LaunchContext, LaunchRole, Podman};
@@ -64,7 +65,11 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
     };
     let context = runtime.launch_context(config.clone());
     let renderer = Arc::new(SandboxRenderer::new(context.clone()));
-    let factory = Arc::new(SandboxSessionFactory::new(context.clone()));
+    let credentials = Arc::new(CredentialAuthority::default());
+    let factory = Arc::new(SandboxSessionFactory::new(
+        context.clone(),
+        credentials.clone(),
+    ));
     let state = if runtime.is_scaffolded() {
         ProjectState::Scaffolded(Arc::new(ProjectServices {
             directory: runtime.directory.clone(),
@@ -87,7 +92,8 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
             clyean_version: VERSION.to_string(),
         }))
     };
-    let service = Arc::new(OrchestratorService::new(state, VERSION));
+    let service =
+        Arc::new(OrchestratorService::new(state, VERSION).with_credential_authority(credentials));
 
     if args.r#continue {
         warn_if_another_launch_is_running(&runtime.podman, &runtime.project_id);

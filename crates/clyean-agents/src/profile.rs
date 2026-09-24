@@ -22,8 +22,10 @@ pub const MCP_FILE_NAME: &str = "mcp.json";
 pub const AGENTS_FILE_NAME: &str = "AGENTS.md";
 pub const EXTENSIONS_DIR_NAME: &str = "extensions";
 pub const EXTENSION_VERSION_MARKER: &str = "// CLYEAN_EXTENSION_VERSION=";
+/// The file a sub-agent's credential copies are delivered in, inside its own profile.
+pub const CREDENTIALS_BUNDLE_FILE_NAME: &str = "clyean-credentials.json";
 
-/// A Clyean-managed harness extension shipped into the User Assistant's profile.
+/// A Clyean-managed harness extension shipped into an agent's profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedExtension {
     pub file_name: &'static str,
@@ -68,15 +70,26 @@ pub fn container_overlay_path(user: &str, agent: AgentId) -> String {
     format!("{}/{OVERLAY_FILE_NAME}", container_profile_dir(user, agent))
 }
 
-/// Host-side path of the same profile directory inside the root filesystem.
-pub fn host_profile_dir(container_root: &Path, user: &str, agent: AgentId) -> PathBuf {
+pub fn container_credentials_bundle_path(user: &str, agent: AgentId) -> String {
+    format!(
+        "{}/{CREDENTIALS_BUNDLE_FILE_NAME}",
+        container_profile_dir(user, agent)
+    )
+}
+
+/// Host-side path of an agent's profile root inside the root filesystem.
+pub fn host_profile_root(container_root: &Path, user: &str, agent: AgentId) -> PathBuf {
     container_root
         .join("home")
         .join(user)
         .join(".omp")
         .join("profiles")
         .join(agent.id())
-        .join("agent")
+}
+
+/// Host-side path of the same profile directory inside the root filesystem.
+pub fn host_profile_dir(container_root: &Path, user: &str, agent: AgentId) -> PathBuf {
+    host_profile_root(container_root, user, agent).join("agent")
 }
 
 /// Everything Clyean writes into one agent's profile before launching it.
@@ -152,42 +165,6 @@ impl ProfileProjection {
         }
         Ok(report)
     }
-}
-
-/// Files that make up the harness's credential store inside a profile.
-pub const CREDENTIAL_STORE_FILES: [&str; 3] = ["agent.db", "agent.db-wal", "agent.db-shm"];
-
-/// Copies the credential store of `from` into the profile of `to`, replacing what is there.
-/// Returns whether a store existed to copy.
-pub fn inherit_credentials(
-    container_root: &Path,
-    user: &str,
-    from: AgentId,
-    to: AgentId,
-) -> Result<bool> {
-    let source_dir = host_profile_dir(container_root, user, from);
-    if !source_dir.join(CREDENTIAL_STORE_FILES[0]).is_file() {
-        return Ok(false);
-    }
-    let target_dir = host_profile_dir(container_root, user, to);
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| AgentError::io(format!("creating {}", target_dir.display()), e))?;
-    for file_name in CREDENTIAL_STORE_FILES {
-        let source = source_dir.join(file_name);
-        let target = target_dir.join(file_name);
-        if source.is_file() {
-            std::fs::copy(&source, &target).map_err(|e| {
-                AgentError::io(
-                    format!("copying {} to {}", source.display(), target.display()),
-                    e,
-                )
-            })?;
-        } else if target.exists() {
-            std::fs::remove_file(&target)
-                .map_err(|e| AgentError::io(format!("removing stale {}", target.display()), e))?;
-        }
-    }
-    Ok(true)
 }
 
 fn extension_is_current(path: &Path, extension: &ManagedExtension) -> bool {
@@ -274,35 +251,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overlay, json!({}));
-    }
-
-    #[test]
-    fn credential_store_is_copied_from_the_user_assistant_profile() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(!inherit_credentials(
-            root.path(),
-            "skye",
-            AgentId::UserAssistant,
-            AgentId::Programmer
-        )
-        .unwrap());
-        let source = host_profile_dir(root.path(), "skye", AgentId::UserAssistant);
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join("agent.db"), b"db").unwrap();
-        std::fs::write(source.join("agent.db-wal"), b"wal").unwrap();
-        let target = host_profile_dir(root.path(), "skye", AgentId::Programmer);
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("agent.db-shm"), b"stale").unwrap();
-        assert!(inherit_credentials(
-            root.path(),
-            "skye",
-            AgentId::UserAssistant,
-            AgentId::Programmer
-        )
-        .unwrap());
-        assert_eq!(std::fs::read(target.join("agent.db")).unwrap(), b"db");
-        assert_eq!(std::fs::read(target.join("agent.db-wal")).unwrap(), b"wal");
-        assert!(!target.join("agent.db-shm").exists());
     }
 
     #[test]
