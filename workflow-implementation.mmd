@@ -12,6 +12,7 @@ flowchart TB
     sed5["Software Engineering Director: Instruct Software Architect to review the implemented changes to verify they (i) correctly implement the change plan, (ii) fulfill the entirety of `.clyean/SPECS.md`, (iii) adhere to the materials in `.clyean/architecture`, and (iv) meet high code quality standards"]
     sed6["Software Engineering Director: Inform User Assistant that change implementation is complete"]
     sed7["Software Engineering Director: Instruct Programmer to remediate the issues identified by the implementation change review"]
+    sed8["Software Engineering Director: Push the unit of work's branch to the project's remote repository and open a pull request for it"]
 
     ua0("User Assistant: Notify the user that change implementation is complete")
 
@@ -56,5 +57,6 @@ flowchart TB
     sa3 --> sed7
     sed7 --> p0
     sa2 -- "Implementation changes are sufficient" --> sa4
-    sa4 --> sed6
+    sa4 --> sed8
+    sed8 --> sed6
     sed6 --> ua0

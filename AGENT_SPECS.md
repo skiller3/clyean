@@ -87,6 +87,14 @@ When the prompt type is `SOFTWARE_ENGINEERING_PROJECT_IMPLEMENTATION`, the Softw
 
 For avoidance of doubt, the `sed4["Software Engineering Director: Re-run the planning workflow that generated the change plan with the additional concern of resolving the blocking issue"]` node in `workflow-implementation.mmd` represents re-execution of the preceding sub-section ("Planning Prompt Handling") with the intent of producing a new version of the change plan.  New versions of change plans should not clobber old versions via in-place plan file edits; instead, Clyean's change plan naming and tracking conventions should gracefully support incremental "versions" of a change plan.  Re-planning is bounded to two cycles per unit of work, the implementation review loop to three remediation rounds, and diagram rendering to three attempts, after which the unit of work fails with the outstanding issue.  After each completed step the orchestrator renders the architecture diagrams when they changed and commits the step's artifacts under the identity of the agent that produced them.
 
+## Remote Repository Management
+
+The Software Engineering Director is the Clyean agent responsible for pushing changes to the project's remote repositories and opening pull requests, which is the exception granted in the "Sandboxing, Workspaces & Mounts" section of `GENERAL_SPECS.md`.  When an implementation unit of work completes, after the Software Architect approves the implemented changes and before the User Assistant is told that the work is complete, the Software Engineering Director:
+1. Pushes the branch that holds the unit of work's commits to the project's remote repository.  It never pushes directly to the remote's default branch: when the commits sit on the default branch locally, it pushes them to a new remote branch named after the change plan instead.
+2. Opens a pull request that proposes that branch for merge into the remote's default branch (or into another branch the user names), with a title and description drawn from the change plan, and includes the pull request's address in its completion notice.
+
+The Software Engineering Director never merges a pull request, force-pushes, or rewrites history that has already been pushed, unless the user explicitly asks.  When the project has no remote repository, or no credentials for it reach the Software Engineering Director, it skips both steps and says so in its completion notice.
+
 # Specifier
 
 Responsible for ensuring (1) change plans comprehensively describe the updates to `.clyean/SPECS.md` necessary for the software system's interface (e.g. UI, API, CLI) behavior to match the Clyean user's intended changes and (2) `./clyean/SPECS.md` is correctly updated to describe the software system's interface behavior as part of software change implementation.
