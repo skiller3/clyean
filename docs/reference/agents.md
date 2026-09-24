@@ -66,7 +66,7 @@ Implements the plan against `SPECS.md` and the architecture, runs the build and 
 
 ## Files projected into a profile
 
-Before an agent starts, Clyean writes into `.clyean/container-root/home/<user>/.omp/profiles/<identifier>/agent/`:
+Before an agent starts, Clyean writes into `/home/<user>/.omp/profiles/<identifier>/agent/` in the project's sandbox root filesystem:
 
 - `AGENTS.md`: the baseline plus the local enhancement.
 - `clyean-overlay.json`: the merged settings overlay, passed with `--config`.

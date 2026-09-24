@@ -8,7 +8,7 @@ Everything Clyean keeps in a project lives under `.clyean/`, beside the project'
 | --- | --- | --- | --- |
 | `.clyean/project.json` | yes | Clyean at scaffold time; you afterwards | Top-level configuration (schema below).  Its existence means the project is scaffolded. |
 | `.clyean/project.local.json` | no (`*.local.json`) | you | Local overrides deep-merged over `project.json`. |
-| `.clyean/.gitignore` | yes | Clyean | The ignore rules Git did not already honor, from `/container-root/`, `*.local.json`, `*.local.md`, `/lock`, `/logs/`, `/work/`.  Clyean checks each rule with `git check-ignore` and never edits a `.gitignore` you maintain. |
+| `.clyean/.gitignore` | yes | Clyean | The ignore rules Git did not already honor, from `*.local.json`, `*.local.md`, `/lock`, `/logs/`, `/work/`.  Clyean checks each rule with `git check-ignore` and never edits a `.gitignore` you maintain. |
 | `.clyean/agents/AGENTS__<NAME>.md` | yes | Clyean once, then you | Baseline instructions of one agent, projected into the agent's profile as `AGENTS.md`. |
 | `.clyean/agents/AGENTS__<NAME>.local.md` | no | you | Appended to the baseline when the profile is projected. |
 | `.clyean/agents/<NAME>.omp.json` | yes | Clyean once, then you | Harness settings overlay (`config.yml` schema), applied last through `--config`. |
@@ -24,8 +24,7 @@ Everything Clyean keeps in a project lives under `.clyean/`, beside the project'
 | `.clyean/work/<work-id>.json` | no | Clyean | Journals of research and scaffolding work. |
 | `.clyean/lock` | no | Clyean | Advisory file lock held while a unit of work runs (unused when worktrees are enabled). |
 | `.clyean/logs/` | no | reserved | Reserved for logs. |
-| `.clyean/container-root/` | no | Clyean and the agents | The sandbox root filesystem; see the [sandbox contract](sandbox-contract.md).  Masked with an empty `tmpfs` inside the containers. |
-| `.clyean/container-root/.clyean-sandbox.json` | no | Clyean | Provisioning marker: image, digest, provisioning schema version, Clyean version, time, harness version. |
+| `.clyean/sandbox.local.json` | no | Clyean | The identifier of the project's sandbox root filesystem, which lives outside the project beside Podman's data; see the [sandbox contract](sandbox-contract.md#root-filesystem).  Local-only, so a moved project keeps its sandbox, every clone gets its own, and copying the file into another checkout makes both share one. |
 
 `<NAME>` is the agent identifier in upper snake case, for example `SOFTWARE_ENGINEERING_DIRECTOR`.
 
