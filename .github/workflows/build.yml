@@ -23,21 +23,33 @@ env:
 jobs:
   test-rust:
     # Ubuntu 24.04 carries Podman 4.9.3, the oldest release Clyean supports on
-    # Linux, and Ubuntu 26.04 carries Podman 5.7.0.
+    # Linux, and Ubuntu 26.04 carries Podman 5.7.0. The Podman tests run on the
+    # Ubuntu images, a second time through Podman's remote client, which takes
+    # the paths a Podman machine takes on macOS and Windows. macOS and Windows
+    # run the unit tests.
     name: Rust tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-26.04]
+        include:
+          - os: ubuntu-24.04
+            musl: x86_64-unknown-linux-musl
+          - os: ubuntu-26.04
+            musl: x86_64-unknown-linux-musl
+          - os: ubuntu-26.04-arm
+            musl: aarch64-unknown-linux-musl
+          - os: macos-latest
+          - os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.musl }}
       - uses: Swatinem/rust-cache@v2
       - name: Ensure Podman is available for sandbox integration tests
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           if ! command -v podman >/dev/null 2>&1; then
@@ -46,17 +58,80 @@ jobs:
           fi
           podman --version
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build the static bridge for the Podman tests
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p clyean-bridge
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked --target ${{ matrix.musl }} -p clyean-bridge
       - name: Unit and integration tests
+        if: runner.os == 'Linux'
         env:
           CLYEAN_PODMAN_TESTS: "1"
         run: |
-          export CLYEAN_BRIDGE_BINARY="$PWD/target/x86_64-unknown-linux-musl/release/clyean-bridge"
+          export CLYEAN_BRIDGE_BINARY="$PWD/target/${{ matrix.musl }}/release/clyean-bridge"
           cargo test --workspace --locked
+      - name: Podman tests through the remote client
+        if: runner.os == 'Linux'
+        env:
+          CLYEAN_PODMAN_TESTS: "1"
+        run: |
+          set -euo pipefail
+          socket="$RUNNER_TEMP/podman.sock"
+          podman system service --time 0 "unix://$socket" &
+          for _ in $(seq 1 50); do [ -S "$socket" ] && break; sleep 0.2; done
+          mkdir -p "$RUNNER_TEMP/remote-bin"
+          printf '#!/bin/sh\nexec %s --remote --url unix://%s "$@"\n' "$(command -v podman)" "$socket" > "$RUNNER_TEMP/remote-bin/podman"
+          chmod +x "$RUNNER_TEMP/remote-bin/podman"
+          export PATH="$RUNNER_TEMP/remote-bin:$PATH"
+          podman info --format 'remote service: {{.Host.ServiceIsRemote}}'
+          export CLYEAN_BRIDGE_BINARY="$PWD/target/${{ matrix.musl }}/release/clyean-bridge"
+          cargo test --locked -p clyean-sandbox --test podman_user_assistant
+      - name: Unit tests
+        if: runner.os != 'Linux'
+        run: cargo test --workspace --locked
+
+  test-installers:
+    # The installers size a new Podman machine from the host; their dry runs
+    # print the commands, which these checks compare for a small and a large host.
+    name: Installer dry runs (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: macOS machine sizing
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          small="$(CLYEAN_INSTALL_HOST_CPUS=2 CLYEAN_INSTALL_HOST_MEMORY_MIB=8192 sh install.sh --dry-run)"
+          echo "$small"
+          echo "$small" | grep -F -- "+ podman machine init --cpus 2 --memory 4096 --disk-size 100"
+          large="$(CLYEAN_INSTALL_HOST_CPUS=12 CLYEAN_INSTALL_HOST_MEMORY_MIB=65536 sh install.sh --dry-run)"
+          echo "$large"
+          echo "$large" | grep -F -- "+ podman machine init --cpus 4 --memory 8192 --disk-size 100"
+      - name: Windows machine sizing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CLYEAN_INSTALL_HOST_CPUS = "2"
+          $env:CLYEAN_INSTALL_HOST_MEMORY_MIB = "8192"
+          $small = & ./install.ps1 -DryRun *>&1 | Out-String
+          Write-Host $small
+          if ($small -notmatch "\+ podman machine init" -or $small -notmatch "wslconfig") { throw "a small host must get a machine and .wslconfig advice" }
+          $env:CLYEAN_INSTALL_HOST_CPUS = "16"
+          $env:CLYEAN_INSTALL_HOST_MEMORY_MIB = "32768"
+          $large = & ./install.ps1 -DryRun *>&1 | Out-String
+          Write-Host $large
+          if ($large -match "wslconfig") { throw "a large host needs no .wslconfig advice" }
+          $env:CONTAINERS_MACHINE_PROVIDER = "hyperv"
+          $hyperv = & ./install.ps1 -DryRun *>&1 | Out-String
+          Write-Host $hyperv
+          if ($hyperv -notmatch "podman machine init --cpus 4 --memory 8192 --disk-size 100") { throw "Hyper-V machines are sized like macOS machines" }
 
   test-extensions:
     name: Harness extension tests
@@ -105,7 +180,7 @@ jobs:
 
   build-cli:
     name: Build clyean (${{ matrix.asset }})
-    needs: [test-rust, test-extensions, test-harness]
+    needs: [test-rust, test-installers, test-extensions, test-harness]
     strategy:
       fail-fast: false
       matrix:
@@ -168,7 +243,7 @@ jobs:
     # The bridge runs inside sandbox images of any C library, so it is a static
     # musl executable with no dependencies beyond the standard library.
     name: Build bridge (${{ matrix.asset }})
-    needs: [test-rust, test-extensions, test-harness]
+    needs: [test-rust, test-installers, test-extensions, test-harness]
     strategy:
       fail-fast: false
       matrix:
@@ -211,7 +286,7 @@ jobs:
 
   build-harness:
     name: Build contained harness (linux-x64, linux-arm64)
-    needs: [test-rust, test-extensions, test-harness]
+    needs: [test-rust, test-installers, test-extensions, test-harness]
     runs-on: ubuntu-latest
     defaults:
       run:
