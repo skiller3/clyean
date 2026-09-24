@@ -9,6 +9,7 @@ set -e
 #   curl -fsSL https://clyean.com/install.sh | sh -s -- --source
 #   curl -fsSL https://clyean.com/install.sh | sh -s -- --ref v0.2.0
 #   curl -fsSL https://clyean.com/install.sh | sh -s -- --no-deps
+#   curl -fsSL https://clyean.com/install.sh | sh -s -- --dry-run
 #
 # Options:
 #   --binary       Install the prebuilt clyean binary from GitHub releases (default)
@@ -16,14 +17,20 @@ set -e
 #   --ref <tag>    Install a specific release tag, for example v0.2.0 (default: latest release)
 #   -r <tag>       Shorthand for --ref
 #   --no-deps      Do not install missing host dependencies (git, curl, podman); print instructions instead
+#   --dry-run      Print the commands the installer would run, including the Podman machine's size, and change nothing
 #
 # Environment:
 #   CLYEAN_INSTALL_DIR   Directory that receives the clyean executable (default: $HOME/.local/bin)
+#   CLYEAN_INSTALL_HOST_CPUS, CLYEAN_INSTALL_HOST_MEMORY_MIB
+#                        Stand in for the host's CPU count and memory when sizing a Podman machine (for testing)
 #
 # Clyean runs every agent inside a Podman container, so Podman is a required
-# host dependency alongside git and curl. The installer never prompts: package
-# managers are invoked in their non-interactive modes, and sudo is used only
-# when the current user is not root.
+# host dependency alongside git and curl: Podman 4.9 or later on Linux, and
+# 5.0 or later on macOS, where it runs containers in a Podman machine. The
+# installer never prompts: package managers are invoked in their
+# non-interactive modes, and sudo is used only when the current user is not
+# root. It creates a Podman machine only when none exists, and never changes
+# an existing one.
 
 REPO="skiller3/clyean"
 INSTALL_DIR="${CLYEAN_INSTALL_DIR:-$HOME/.local/bin}"
@@ -34,6 +41,7 @@ GITHUB_DOWNLOAD="https://github.com/${REPO}/releases/download"
 MODE=""
 REF=""
 INSTALL_DEPS="yes"
+DRY_RUN="no"
 while [ $# -gt 0 ]; do
     case "$1" in
         --source)
@@ -74,6 +82,10 @@ while [ $# -gt 0 ]; do
             INSTALL_DEPS="no"
             shift
             ;;
+        --dry-run)
+            DRY_RUN="yes"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -90,9 +102,12 @@ has_command() {
 }
 
 # Print a command before running it so the user always sees what the
-# installer does to the host.
+# installer does to the host. A dry run only prints it.
 run_logged() {
     echo "+ $*"
+    if [ "$DRY_RUN" = "yes" ]; then
+        return 0
+    fi
     "$@"
 }
 
@@ -207,15 +222,79 @@ install_macos_packages() {
     run_logged brew install $packages
 }
 
-# Podman on macOS runs containers inside a Linux virtual machine that must be
-# created once and started before Clyean can launch agents.
+# The oldest Podman release Clyean supports on this operating system.
+podman_floor() {
+    case "$(host_platform)" in
+        darwin) echo "5.0" ;;
+        *)      echo "4.9" ;;
+    esac
+}
+
+# Stops with upgrade instructions when the installed Podman is older than the
+# floor. Clyean checks again before every launch.
+check_podman_version() {
+    if ! has_command podman; then
+        echo "Podman is not installed yet; it must be $(podman_floor) or later."
+        return 0
+    fi
+    version="$(podman --version 2>/dev/null | awk '{print $NF}')"
+    floor="$(podman_floor)"
+    major="${version%%.*}"
+    rest="${version#*.}"
+    minor="${rest%%.*}"
+    floor_major="${floor%%.*}"
+    floor_minor="${floor#*.}"
+    if [ -n "$major" ] && { [ "$major" -gt "$floor_major" ] || { [ "$major" -eq "$floor_major" ] && [ "$minor" -ge "$floor_minor" ]; }; }; then
+        return 0
+    fi
+    echo "Clyean needs Podman ${floor} or later, but Podman ${version:-of an unknown version} is installed."
+    case "$(host_platform)" in
+        darwin) echo "Upgrade it with:  brew upgrade podman" ;;
+        linux)
+            echo "Install a newer Podman from your distribution. Debian 12 packages 4.3.1; use Debian 13, or a"
+            echo "Podman build from another source: https://podman.io/docs/installation"
+            ;;
+    esac
+    exit 1
+}
+
+host_cpus() {
+    if [ -n "$CLYEAN_INSTALL_HOST_CPUS" ]; then
+        echo "$CLYEAN_INSTALL_HOST_CPUS"
+    else
+        sysctl -n hw.ncpu 2>/dev/null || echo 4
+    fi
+}
+
+host_memory_mib() {
+    if [ -n "$CLYEAN_INSTALL_HOST_MEMORY_MIB" ]; then
+        echo "$CLYEAN_INSTALL_HOST_MEMORY_MIB"
+    else
+        bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 17179869184)"
+        echo $((bytes / 1048576))
+    fi
+}
+
+# Podman on macOS runs containers inside a Linux virtual machine. A new machine
+# gets 4 CPUs, or all of the host's if it has fewer; 8 GiB of memory, or half
+# of the host's if that is less; and a disk that can grow to 100 GiB. Its size
+# is fixed once created, so an existing machine is only started when stopped.
 ensure_podman_machine() {
     if [ "$(host_platform)" != "darwin" ]; then
         return 0
     fi
-    machines="$(podman machine list --format '{{.Name}}' 2>/dev/null || true)"
+    machines=""
+    if has_command podman; then
+        machines="$(podman machine list --format '{{.Name}}' 2>/dev/null || true)"
+    fi
     if [ -z "$machines" ]; then
-        run_logged podman machine init
+        cpus="$(host_cpus)"
+        [ "$cpus" -gt 4 ] && cpus=4
+        memory="$(( $(host_memory_mib) / 2 ))"
+        [ "$memory" -gt 8192 ] && memory=8192
+        run_logged podman machine init --cpus "$cpus" --memory "$memory" --disk-size 100
+        run_logged podman machine start || echo "Could not start the Podman machine; run 'podman machine start' before using clyean."
+        return 0
     fi
     if ! podman machine inspect --format '{{.State}}' 2>/dev/null | grep -q running; then
         run_logged podman machine start || echo "Could not start the Podman machine; run 'podman machine start' before using clyean."
@@ -251,12 +330,13 @@ ensure_dependencies() {
             darwin) install_macos_packages "$missing" ;;
         esac
         still_missing="$(missing_dependencies)"
-        if [ -n "$still_missing" ]; then
+        if [ -n "$still_missing" ] && [ "$DRY_RUN" = "no" ]; then
             echo "Dependencies still missing after installation:$still_missing"
             print_dependency_instructions "$still_missing"
             exit 1
         fi
     fi
+    check_podman_version
     if [ "$INSTALL_DEPS" = "yes" ]; then
         ensure_podman_machine
     fi
@@ -397,6 +477,11 @@ finish_install() {
 
 # Main logic
 ensure_dependencies
+
+if [ "$DRY_RUN" = "yes" ]; then
+    echo "Dry run: would install the $MODE build of clyean ${REF:-(latest release)} for $(host_platform)-$(host_arch) into ${INSTALL_DIR}."
+    exit 0
+fi
 
 case "$MODE" in
     source) install_via_cargo ;;
