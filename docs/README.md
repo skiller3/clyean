@@ -9,9 +9,11 @@ The documentation follows [Diátaxis](https://diataxis.fr/): tutorials teach, ho
 
 ## How-to guides
 
-- [Run Clyean inside Herdr](how-to/run-inside-herdr.md): what Clyean reports to Herdr, what it mounts, and the sandboxing exception that implies.
+- [Run Clyean inside Herdr](how-to/run-inside-herdr.md): what Clyean reports to Herdr, what it relays, and the sandboxing exception that implies.
 - [Configure agents](how-to/configure-agents.md): models, MCP servers, and instruction enhancements per agent, with local-only overrides.
-- [Manage the sandbox](how-to/manage-the-sandbox.md): inspect, build, rebuild, and enter the Podman sandbox; change the image, mounts, and harness binary.
+- [Set up macOS](how-to/set-up-macos.md): the Podman machine Clyean needs on macOS, its size and provider, and where projects can live.
+- [Set up Windows](how-to/set-up-windows.md): the Podman machine Clyean needs on Windows, WSL's limits, Hyper-V, and where projects can live.
+- [Manage the sandbox](how-to/manage-the-sandbox.md): where each project's root filesystem lives; inspect, build, rebuild, prune, and enter the Podman sandbox; change the image, mounts, and harness binary.
 - [Resume interrupted work](how-to/resume-interrupted-work.md): find unfinished work in journals and resume or cancel it.
 - [Use print mode](how-to/use-print-mode.md): drive the User Assistant from scripts with `clyean -p`.
 - [Release Clyean](how-to/release-clyean.md): what CI runs, how to cut a release, and how patch tags and assets are produced.
