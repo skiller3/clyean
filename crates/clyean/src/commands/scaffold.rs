@@ -58,7 +58,7 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
         ProjectTypeArg::SoftwareEngineering => ProjectType::SoftwareEngineeringProject,
         ProjectTypeArg::Miscellaneous => ProjectType::MiscellaneousProject,
     };
-    let context = runtime.launch_context(runtime.provisional_config(&pending), None);
+    let context = runtime.launch_context(runtime.provisional_config(&pending));
     let service = Arc::new(OrchestratorService::new(
         ProjectState::Unscaffolded(Box::new(UnscaffoldedProject {
             directory: runtime.directory.clone(),

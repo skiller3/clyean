@@ -1,75 +1,25 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! The Unix domain socket transport of the orchestrator protocol: one request per
-//! connection, an immediate response, then streamed events until a closing event.
+//! The connection handling of the orchestrator protocol: one request per connection, an
+//! immediate response, then streamed events until a closing event.  Connections arrive
+//! through the bridge of the User Assistant's container, so any byte stream serves.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 
 use crate::protocol::{Request, Response, StreamedEvent};
 use crate::service::{Dispatch, OrchestratorService};
-use crate::{OrchestratorError, Result};
+
+/// The method a User Assistant calls once and keeps open for its whole life; the
+/// connection ending tells it that its `clyean` process is gone.
+pub const LEASE_METHOD: &str = "session.lease";
 
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[cfg(unix)]
-pub async fn serve(
-    service: Arc<OrchestratorService>,
-    socket_path: &Path,
-    shutdown: CancellationToken,
-) -> Result<()> {
-    use tokio::net::UnixListener;
-
-    if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| OrchestratorError::io(format!("creating {}", parent.display()), e))?;
-    }
-    if socket_path.exists() {
-        std::fs::remove_file(socket_path).map_err(|e| {
-            OrchestratorError::io(
-                format!("removing stale socket {}", socket_path.display()),
-                e,
-            )
-        })?;
-    }
-    let listener = UnixListener::bind(socket_path)
-        .map_err(|e| OrchestratorError::io(format!("binding {}", socket_path.display()), e))?;
-    tracing::info!(target: "clyean::orchestrator", socket = %socket_path.display(), "orchestrator listening");
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            accepted = listener.accept() => {
-                let (stream, _) = accepted.map_err(|e| OrchestratorError::io("accepting a connection", e))?;
-                let service = service.clone();
-                tokio::spawn(async move {
-                    let (reader, writer) = stream.into_split();
-                    if let Err(error) = handle_connection(service, reader, writer).await {
-                        tracing::debug!(target: "clyean::orchestrator", %error, "connection ended with an error");
-                    }
-                });
-            }
-        }
-    }
-    let _ = std::fs::remove_file(socket_path);
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub async fn serve(
-    _service: Arc<OrchestratorService>,
-    _socket_path: &Path,
-    _shutdown: CancellationToken,
-) -> Result<()> {
-    Err(OrchestratorError::Workflow(
-        "the orchestrator socket requires a Unix host in this version".into(),
-    ))
-}
 
 /// Serves one connection over any byte stream (exercised directly by tests).
 pub async fn handle_connection<R, W>(
@@ -96,6 +46,12 @@ where
             return write_json(&mut writer, &response).await;
         }
     };
+    if request.method == LEASE_METHOD {
+        let response = Response::result(&request.id, json!({"type": "lease"}));
+        write_json(&mut writer, &response).await?;
+        while let Ok(Some(_)) = lines.next_line().await {}
+        return Ok(());
+    }
     let Dispatch { response, stream } = service.dispatch(request).await;
     write_json(&mut writer, &response).await?;
     let Some(attachment) = stream else {

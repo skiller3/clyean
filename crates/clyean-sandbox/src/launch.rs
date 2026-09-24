@@ -6,15 +6,25 @@
 
 use std::path::{Path, PathBuf};
 
-use clyean_agents::profile::container_overlay_path;
+use clyean_agents::profile::{container_daemon_dirs, container_overlay_path};
 use clyean_agents::AgentId;
 use clyean_plantuml::render::{CommandOutcome, CommandRunner};
-use clyean_project::{ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
+use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
 
 use crate::container::{
-    AgentContainerSpec, ContainerPaths, MountSpec, ORCHESTRATOR_SOCKET_CONTAINER_PATH,
+    AgentContainerSpec, ContainerPaths, MountSpec, HARNESS_CONTAINER_PATH,
+    ORCHESTRATOR_SOCKET_CONTAINER_PATH,
 };
-use crate::herdr::HerdrHostContext;
+use crate::herdr::{self, HerdrHostContext};
+
+/// Labels that identify the User Assistant containers of every project.
+pub const PROJECT_LABEL: &str = "clyean.project";
+pub const LAUNCH_LABEL: &str = "clyean.launch";
+pub const ROLE_LABEL: &str = "clyean.role";
+pub const USER_ASSISTANT_ROLE: &str = "user-assistant";
+
+/// In-container directories of the bridge's sockets, private to each User Assistant.
+const BRIDGE_SOCKET_DIRS: [&str; 2] = ["/run/clyean", "/run/herdr"];
 use crate::podman::Podman;
 use crate::user::ContainerUser;
 
@@ -29,14 +39,17 @@ pub struct LaunchContext {
     pub user: ContainerUser,
     pub clyean_version: String,
     pub herdr: Option<HerdrHostContext>,
-    pub orchestrator_socket: Option<PathBuf>,
 }
 
 /// How an agent participates in work, which decides its interactivity and identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchRole {
-    /// The User Assistant's TUI session the user attaches to.
-    UserAssistant,
+    /// The User Assistant of one `clyean` invocation, which reaches that invocation only
+    /// through the bridge mounted from `bridge_binary` on the host.
+    UserAssistant {
+        launch_id: LaunchId,
+        bridge_binary: PathBuf,
+    },
     /// A sub-agent driven over RPC for one unit of work.
     SubAgent { work_id: String },
     /// A one-off command run inside the sandbox by Clyean itself.
@@ -55,7 +68,9 @@ impl LaunchContext {
 
     pub fn container_name(&self, agent: AgentId, role: &LaunchRole) -> String {
         match role {
-            LaunchRole::UserAssistant => format!("clyean-{}-{}", self.project_id, agent.id()),
+            LaunchRole::UserAssistant { launch_id, .. } => {
+                format!("clyean-{}-{}-{launch_id}", self.project_id, agent.id())
+            }
             LaunchRole::SubAgent { work_id } => {
                 let short: String = work_id
                     .chars()
@@ -131,8 +146,8 @@ impl LaunchContext {
         env
     }
 
-    /// The `podman run` description of `agent` in `role` running `harness_args` after the
-    /// harness binary (which is always the container command).
+    /// The `podman run` description of `agent` in `role` running the harness with
+    /// `harness_args`.  A User Assistant's harness starts only once its bridge is serving.
     pub fn agent_container_spec(
         &self,
         agent: AgentId,
@@ -140,55 +155,112 @@ impl LaunchContext {
         harness_args: Vec<String>,
     ) -> AgentContainerSpec {
         let paths = self.container_paths();
-        let (mut mounts, tmpfs_masks) = self.shared_mounts(&paths);
-        let mut environment = self.shared_environment(agent, &paths);
-        let mut tty = false;
-        let mut remove_on_exit = true;
-        match &role {
-            LaunchRole::UserAssistant => {
-                tty = true;
-                remove_on_exit = false;
-                for key in ["TERM", "COLORTERM", "TERM_PROGRAM"] {
-                    if let Ok(value) = std::env::var(key) {
-                        environment.push((key.to_string(), value));
-                    }
-                }
-                if let Some(socket) = &self.orchestrator_socket {
-                    mounts.push(MountSpec::read_write(
-                        socket.clone(),
-                        ORCHESTRATOR_SOCKET_CONTAINER_PATH,
-                    ));
-                    environment.push((
-                        "CLYEAN_ORCHESTRATOR_SOCKET".to_string(),
-                        ORCHESTRATOR_SOCKET_CONTAINER_PATH.to_string(),
-                    ));
-                }
-                if let Some(herdr) = &self.herdr {
-                    mounts.extend(herdr.container_mounts());
-                    environment.extend(herdr.container_environment());
-                }
-            }
-            LaunchRole::SubAgent { work_id } => {
-                environment.push(("CLYEAN_WORK_ID".to_string(), work_id.clone()));
-            }
-            LaunchRole::Maintenance => {}
-        }
-        let mut command = vec![crate::container::HARNESS_CONTAINER_PATH.to_string()];
+        let (mounts, tmpfs_mounts) = self.shared_mounts(&paths);
+        let mut command = vec![HARNESS_CONTAINER_PATH.to_string()];
         command.extend(harness_args);
-        AgentContainerSpec {
+        let mut spec = AgentContainerSpec {
             name: self.container_name(agent, &role),
             agent,
             rootfs: self.layout.container_root_dir(),
             workdir: paths.project_dir().to_string(),
+            labels: Vec::new(),
             mounts,
-            tmpfs_masks,
-            environment,
-            tty,
-            detached: false,
-            remove_on_exit,
+            tmpfs_mounts,
+            environment: self.shared_environment(agent, &paths),
+            tty: false,
+            remove_on_exit: true,
             extra_run_args: self.config.sandbox.podman_run_args.clone(),
             command,
+        };
+        match role {
+            LaunchRole::UserAssistant {
+                launch_id,
+                bridge_binary,
+            } => self.add_user_assistant_parts(&mut spec, &launch_id, bridge_binary),
+            LaunchRole::SubAgent { work_id } => {
+                spec.environment
+                    .push(("CLYEAN_WORK_ID".to_string(), work_id));
+                spec.tmpfs_mounts
+                    .extend(container_daemon_dirs(self.user.name(), agent));
+            }
+            LaunchRole::Maintenance => {}
         }
+        spec
+    }
+
+    fn add_user_assistant_parts(
+        &self,
+        spec: &mut AgentContainerSpec,
+        launch_id: &LaunchId,
+        bridge_binary: PathBuf,
+    ) {
+        spec.tty = true;
+        spec.labels = vec![
+            (PROJECT_LABEL.to_string(), self.project_id.to_string()),
+            (LAUNCH_LABEL.to_string(), launch_id.to_string()),
+            (ROLE_LABEL.to_string(), USER_ASSISTANT_ROLE.to_string()),
+        ];
+        for key in ["TERM", "COLORTERM", "TERM_PROGRAM"] {
+            if let Ok(value) = std::env::var(key) {
+                spec.environment.push((key.to_string(), value));
+            }
+        }
+        spec.environment.push((
+            "CLYEAN_ORCHESTRATOR_SOCKET".to_string(),
+            ORCHESTRATOR_SOCKET_CONTAINER_PATH.to_string(),
+        ));
+        spec.environment
+            .push(("CLYEAN_ORCHESTRATOR_LEASE".to_string(), "1".to_string()));
+        if let Some(herdr) = &self.herdr {
+            spec.environment.extend(herdr.container_environment());
+            spec.mounts.extend(herdr.executable_mount());
+        }
+        spec.mounts.push(MountSpec::read_only(
+            bridge_binary,
+            clyean_bridge::CONTAINER_PATH,
+        ));
+        spec.tmpfs_mounts
+            .extend(BRIDGE_SOCKET_DIRS.iter().map(|dir| dir.to_string()));
+        spec.tmpfs_mounts
+            .extend(container_daemon_dirs(self.user.name(), spec.agent));
+        let mut gated = vec![
+            clyean_bridge::CONTAINER_PATH.to_string(),
+            "await".to_string(),
+            "--ready-file".to_string(),
+            clyean_bridge::READY_FILE.to_string(),
+            "--".to_string(),
+        ];
+        gated.append(&mut spec.command);
+        spec.command = gated;
+    }
+
+    /// Arguments after `podman` that open the bridge session of a running User Assistant
+    /// container: the orchestrator channel always, the Herdr channel inside Herdr.
+    pub fn bridge_exec_args(&self, container_name: &str) -> Vec<String> {
+        let mut args = vec![
+            "exec".to_string(),
+            "--interactive".to_string(),
+            "--detach-keys=".to_string(),
+            container_name.to_string(),
+            clyean_bridge::CONTAINER_PATH.to_string(),
+            "bridge".to_string(),
+            "--ready-file".to_string(),
+            clyean_bridge::READY_FILE.to_string(),
+            "--channel".to_string(),
+            format!(
+                "{}={ORCHESTRATOR_SOCKET_CONTAINER_PATH}",
+                clyean_bridge::ORCHESTRATOR_CHANNEL
+            ),
+        ];
+        if self.herdr.is_some() {
+            args.push("--channel".to_string());
+            args.push(format!(
+                "{}={}",
+                clyean_bridge::HERDR_CHANNEL,
+                herdr::CONTAINER_SOCKET_PATH
+            ));
+        }
+        args
     }
 
     /// Harness arguments common to every agent: the project directory and the tracked
@@ -353,46 +425,118 @@ mod tests {
                 socket_path: PathBuf::from("/tmp/herdr.sock"),
                 bin_path: None,
             }),
-            orchestrator_socket: Some(PathBuf::from("/run/user/1000/clyean/abc.sock")),
+        }
+    }
+
+    fn user_assistant_role(launch: &str) -> LaunchRole {
+        LaunchRole::UserAssistant {
+            launch_id: LaunchId::generate(),
+            bridge_binary: PathBuf::from(launch),
         }
     }
 
     #[test]
-    fn user_assistant_container_gets_tty_sockets_and_herdr() {
+    fn user_assistant_container_is_private_to_its_launch_and_gated_on_its_bridge() {
         let dir = tempfile::tempdir().unwrap();
         let context = context(dir.path());
         let args = context.base_harness_args(AgentId::UserAssistant);
-        let spec =
-            context.agent_container_spec(AgentId::UserAssistant, LaunchRole::UserAssistant, args);
+        let role = user_assistant_role("/home/skyei/.cache/clyean/bridge/clyean-bridge");
+        let LaunchRole::UserAssistant { launch_id, .. } = &role else {
+            unreachable!()
+        };
+        let launch = launch_id.to_string();
+        let spec = context.agent_container_spec(AgentId::UserAssistant, role, args);
         assert!(spec.tty);
-        assert!(!spec.remove_on_exit);
-        assert!(spec.name.ends_with("-user-assistant"));
+        assert!(spec.remove_on_exit);
+        assert!(spec.name.ends_with(&format!("-user-assistant-{launch}")));
+        assert_eq!(
+            spec.labels,
+            vec![
+                (PROJECT_LABEL.to_string(), context.project_id.to_string()),
+                (LAUNCH_LABEL.to_string(), launch.clone()),
+                (ROLE_LABEL.to_string(), USER_ASSISTANT_ROLE.to_string()),
+            ]
+        );
+        for private in [
+            "/run/clyean",
+            "/run/herdr",
+            "/home/skyei/.omp/run",
+            "/home/skyei/.omp/profiles/user-assistant/run",
+        ] {
+            assert!(
+                spec.tmpfs_mounts.contains(&private.to_string()),
+                "{private}"
+            );
+        }
         let run = spec.run_args();
-        assert!(run.iter().any(|a| a == "CLYEAN_AGENT=user-assistant"));
-        assert!(run.iter().any(|a| a == "OMP_PROFILE=user-assistant"));
-        assert!(run
-            .iter()
-            .any(|a| a == "HERDR_SOCKET_PATH=/run/herdr/herdr.sock"));
-        assert!(run
-            .iter()
-            .any(|a| a == "CLYEAN_ORCHESTRATOR_SOCKET=/run/clyean/orchestrator.sock"));
+        for expected in [
+            "--detach-keys=",
+            "CLYEAN_AGENT=user-assistant",
+            "OMP_PROFILE=user-assistant",
+            "HERDR_SOCKET_PATH=/run/herdr/herdr.sock",
+            "CLYEAN_ORCHESTRATOR_SOCKET=/run/clyean/orchestrator.sock",
+            "CLYEAN_ORCHESTRATOR_LEASE=1",
+            "GIT_AUTHOR_NAME=Clyean User Assistant",
+            "type=bind,src=/home/skyei/.cache/clyean/bridge/clyean-bridge,dst=/usr/local/libexec/clyean/clyean-bridge,ro=true",
+            "--memory",
+        ] {
+            assert!(run.contains(&expected.to_string()), "missing {expected}");
+        }
         assert!(run
             .iter()
             .any(|a| a.contains("dst=/mnt/reference-data,ro=true")));
-        assert!(run
-            .iter()
-            .any(|a| a == "GIT_AUTHOR_NAME=Clyean User Assistant"));
-        assert!(run.iter().any(
-            |a| a.starts_with("type=tmpfs,dst=") && a.ends_with("/proj/.clyean/container-root")
-        ));
-        assert!(run.iter().any(|a| a == "--memory"));
-        let command_start = run
-            .iter()
-            .position(|a| a == "/usr/local/bin/clyean")
-            .unwrap();
-        assert_eq!(run[command_start + 1], "--cwd");
-        assert!(run[command_start + 4]
-            .ends_with("/.omp/profiles/user-assistant/agent/clyean-overlay.json"));
+        assert!(
+            !run.iter()
+                .any(|a| a.contains("herdr.sock,") || a.contains(".sock,dst")),
+            "no socket is bind-mounted"
+        );
+        let rootfs = run.iter().position(|a| a == "--rootfs").unwrap();
+        let command = &run[rootfs + 2..];
+        assert_eq!(
+            &command[..5],
+            [
+                "/usr/local/libexec/clyean/clyean-bridge",
+                "await",
+                "--ready-file",
+                "/run/clyean/bridge.ready",
+                "--"
+            ]
+        );
+        assert_eq!(command[5], "/usr/local/bin/clyean");
+        assert_eq!(command[6], "--cwd");
+        assert!(command[9].ends_with("/.omp/profiles/user-assistant/agent/clyean-overlay.json"));
+    }
+
+    #[test]
+    fn concurrent_launches_get_distinct_containers() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = context(dir.path());
+        let first = context.container_name(AgentId::UserAssistant, &user_assistant_role("/b"));
+        let second = context.container_name(AgentId::UserAssistant, &user_assistant_role("/b"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn the_bridge_session_serves_herdr_only_inside_herdr() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = context(dir.path());
+        let args = context.bridge_exec_args("clyean-p-user-assistant-1234abcd");
+        assert_eq!(
+            &args[..6],
+            [
+                "exec",
+                "--interactive",
+                "--detach-keys=",
+                "clyean-p-user-assistant-1234abcd",
+                "/usr/local/libexec/clyean/clyean-bridge",
+                "bridge"
+            ]
+        );
+        assert!(args.contains(&"orchestrator=/run/clyean/orchestrator.sock".to_string()));
+        assert!(args.contains(&"herdr=/run/herdr/herdr.sock".to_string()));
+        context.herdr = None;
+        let args = context.bridge_exec_args("c");
+        assert!(!args.iter().any(|a| a.starts_with("herdr=")));
     }
 
     #[test]
@@ -432,6 +576,10 @@ mod tests {
         assert!(!spec.tty);
         assert!(spec.remove_on_exit);
         assert!(spec.name.ends_with("-programmer-0192awor"));
+        assert!(spec.labels.is_empty());
+        assert!(spec
+            .tmpfs_mounts
+            .contains(&"/home/skyei/.omp/profiles/programmer/run".to_string()));
         let run = spec.run_args();
         assert!(run.iter().any(|a| a == "CLYEAN_WORK_ID=0192a-work"));
         assert!(!run.iter().any(|a| a.starts_with("HERDR_")));

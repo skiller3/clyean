@@ -1,12 +1,12 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
 /// A short, stable identifier of a project derived from its canonical path.  Used to
-/// name containers and runtime sockets, which both have tight length limits.
+/// name containers, whose names should stay short.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectId(String);
 
@@ -27,38 +27,27 @@ impl std::fmt::Display for ProjectId {
     }
 }
 
-/// Per-user runtime directory for sockets.  Kept short because `AF_UNIX` socket paths
-/// are limited to roughly one hundred bytes.
-pub fn runtime_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(dir).join("clyean");
+/// The identifier of one `clyean` invocation, which names its User Assistant container.
+/// Eight hexadecimal characters taken from the random bits of a version 7 UUID, so two
+/// concurrent invocations of one project never share a container name in practice.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LaunchId(String);
+
+impl LaunchId {
+    pub fn generate() -> Self {
+        let uuid = uuid::Uuid::now_v7().simple().to_string();
+        Self(uuid[uuid.len() - 8..].to_string())
     }
-    let uid = current_user_id();
-    std::env::temp_dir().join(format!("clyean-{uid}"))
-}
 
-/// Host path of the orchestrator socket of a project.
-pub fn orchestrator_socket_path(project_id: &ProjectId) -> PathBuf {
-    runtime_dir().join(format!("{project_id}.sock"))
-}
-
-#[cfg(unix)]
-fn current_user_id() -> u32 {
-    // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc_getuid() }
-}
-
-#[cfg(unix)]
-unsafe fn libc_getuid() -> u32 {
-    extern "C" {
-        fn getuid() -> u32;
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
-    getuid()
 }
 
-#[cfg(not(unix))]
-fn current_user_id() -> u32 {
-    0
+impl std::fmt::Display for LaunchId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[cfg(test)]
@@ -81,10 +70,11 @@ mod tests {
     }
 
     #[test]
-    fn socket_path_lives_in_the_runtime_directory() {
-        let id = ProjectId::of(Path::new("/x"));
-        let path = orchestrator_socket_path(&id);
-        assert!(path.starts_with(runtime_dir()));
-        assert!(path.to_string_lossy().ends_with(&format!("{id}.sock")));
+    fn launch_ids_are_eight_hex_characters_and_distinct() {
+        let first = LaunchId::generate();
+        let second = LaunchId::generate();
+        assert_eq!(first.as_str().len(), 8);
+        assert!(first.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second);
     }
 }

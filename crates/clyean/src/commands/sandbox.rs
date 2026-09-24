@@ -4,20 +4,38 @@
 use anyhow::{Context, Result};
 use clyean_agents::AgentId;
 use clyean_orchestrator::scaffold::{project_agent_profiles, PendingScaffold};
+use clyean_sandbox::orphans::prune_orphaned_user_assistants;
 use clyean_sandbox::rootfs::{self, RootfsMarker};
-use clyean_sandbox::LaunchRole;
+use clyean_sandbox::{LaunchRole, Podman};
 
 use crate::cli::{ProjectArgs, SandboxAction, SandboxArgs};
 use crate::runtime::ProjectRuntime;
 
 pub async fn run(project: &ProjectArgs, args: SandboxArgs) -> Result<i32> {
+    if let SandboxAction::Prune = args.action {
+        return prune(&Podman::default());
+    }
     let runtime = ProjectRuntime::resolve(project)?;
     match args.action {
         SandboxAction::Status => status(&runtime),
         SandboxAction::Build => build(&runtime, false).await,
         SandboxAction::Rebuild => build(&runtime, true).await,
         SandboxAction::Shell => shell(&runtime),
+        SandboxAction::Prune => unreachable!("handled above"),
     }
+}
+
+/// Removes User Assistant containers, in every project, whose `clyean` process is gone.
+fn prune(podman: &Podman) -> Result<i32> {
+    let removed = prune_orphaned_user_assistants(podman)
+        .context("removing orphaned User Assistant containers")?;
+    if removed.is_empty() {
+        println!("No orphaned User Assistant containers.");
+    }
+    for name in removed {
+        println!("Removed orphaned User Assistant container {name}");
+    }
+    Ok(0)
 }
 
 fn status(runtime: &ProjectRuntime) -> Result<i32> {
@@ -85,7 +103,7 @@ fn shell(runtime: &ProjectRuntime) -> Result<i32> {
     } else {
         runtime.provisional_config(&pending)
     };
-    let context = runtime.launch_context(config, None);
+    let context = runtime.launch_context(config);
     let mut spec = context.agent_container_spec(
         AgentId::SoftwareArchitect,
         LaunchRole::Maintenance,

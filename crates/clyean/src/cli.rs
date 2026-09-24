@@ -9,8 +9,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Clyean: a zero-slop agentic coding harness.
 ///
-/// Without a subcommand, `clyean` scaffolds the current directory when needed and
-/// attaches you to the User Assistant agent running in the project's Podman sandbox.
+/// Without a subcommand, `clyean` scaffolds the current directory when needed and starts a
+/// User Assistant agent of its own in the project's Podman sandbox.
 #[derive(Debug, Parser)]
 #[command(name = "clyean", version = VERSION, about, long_about = None, arg_required_else_help = false)]
 pub struct Cli {
@@ -142,6 +142,8 @@ pub enum SandboxAction {
     Rebuild,
     /// Open an interactive shell inside the sandbox.
     Shell,
+    /// Remove User Assistant containers, in every project, whose clyean process is gone.
+    Prune,
 }
 
 #[cfg(test)]

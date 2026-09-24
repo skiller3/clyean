@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! Host-side Herdr detection and the mounts and environment that let the User Assistant
-//! reach the Herdr socket from inside its container.
+//! Host-side Herdr detection and the environment and executable mount that let the User
+//! Assistant use Herdr from inside its container; the bridge relays the socket itself.
 
 use std::path::{Path, PathBuf};
 
@@ -73,20 +73,12 @@ impl HerdrHostContext {
         env
     }
 
-    /// Bind mounts: the socket read-write (the sanctioned sandbox exception) and the
-    /// executable read-only when present.
-    pub fn container_mounts(&self) -> Vec<crate::container::MountSpec> {
-        let mut mounts = vec![crate::container::MountSpec::read_write(
-            self.socket_path.clone(),
-            CONTAINER_SOCKET_PATH,
-        )];
-        if let Some(bin) = &self.bin_path {
-            mounts.push(crate::container::MountSpec::read_only(
-                bin.clone(),
-                CONTAINER_BIN_PATH,
-            ));
-        }
-        mounts
+    /// The host's `herdr` executable, mounted read-only when present.  The socket is not
+    /// mounted: the bridge relays it (the sanctioned sandbox exception).
+    pub fn executable_mount(&self) -> Option<crate::container::MountSpec> {
+        self.bin_path
+            .as_ref()
+            .map(|bin| crate::container::MountSpec::read_only(bin.clone(), CONTAINER_BIN_PATH))
     }
 }
 
@@ -169,9 +161,8 @@ mod tests {
         assert!(env.contains(&("HERDR_SOCKET_PATH".into(), "/run/herdr/herdr.sock".into())));
         assert!(env.contains(&("HERDR_BIN_PATH".into(), "/usr/local/bin/herdr".into())));
         assert!(env.contains(&("HERDR_WORKSPACE_ID".into(), "w1".into())));
-        let mounts = context.container_mounts();
-        assert_eq!(mounts.len(), 2);
-        assert!(!mounts[0].read_only);
-        assert!(mounts[1].read_only);
+        let mount = context.executable_mount().unwrap();
+        assert!(mount.read_only);
+        assert_eq!(mount.target, CONTAINER_BIN_PATH);
     }
 }

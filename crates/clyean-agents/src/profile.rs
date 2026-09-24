@@ -44,9 +44,24 @@ fn extension_version(source: &str) -> Option<u32> {
         .and_then(|value| value.trim().parse().ok())
 }
 
-/// Container-side profile directory of an agent (`HOME` is `/home/<user>`).
+/// Container-side root of an agent's harness profile (`HOME` is `/home/<user>`).
+pub fn container_profile_root(user: &str, agent: AgentId) -> String {
+    format!("/home/{user}/.omp/profiles/{}", agent.id())
+}
+
+/// Container-side profile directory of an agent, where its settings and stores live.
 pub fn container_profile_dir(user: &str, agent: AgentId) -> String {
-    format!("/home/{user}/.omp/profiles/{}/agent", agent.id())
+    format!("{}/agent", container_profile_root(user, agent))
+}
+
+/// The directories where the harness keeps the sockets of its per-profile daemons.  Each
+/// container gets private copies, so no container reaches another's daemons through the
+/// shared root filesystem.
+pub fn container_daemon_dirs(user: &str, agent: AgentId) -> [String; 2] {
+    [
+        format!("/home/{user}/.omp/run"),
+        format!("{}/run", container_profile_root(user, agent)),
+    ]
 }
 
 pub fn container_overlay_path(user: &str, agent: AgentId) -> String {

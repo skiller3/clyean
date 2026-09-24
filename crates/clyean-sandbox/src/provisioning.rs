@@ -91,31 +91,58 @@ impl CommandRunner for RootfsRunner {
     }
 }
 
-/// Where a harness binary was found on the host.
+/// A Linux executable that Clyean runs inside the sandbox and publishes as a release asset
+/// per architecture: the harness, installed into the root filesystem, and the bridge,
+/// mounted into User Assistant containers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxExecutable {
+    /// The release asset name without its architecture tag.
+    pub asset_stem: &'static str,
+    /// The environment variable that names a host copy to use instead.
+    pub override_env: &'static str,
+    /// The name a copy beside the running `clyean` executable may have.
+    pub sibling_name: &'static str,
+    /// The cache subdirectory that holds downloaded copies.
+    pub cache_subdir: &'static str,
+}
+
+pub const HARNESS: SandboxExecutable = SandboxExecutable {
+    asset_stem: "clyean-harness-linux",
+    override_env: "CLYEAN_HARNESS_BINARY",
+    sibling_name: "clyean-harness",
+    cache_subdir: "harness",
+};
+
+/// The bridge must be a static (musl) build so that it runs in any sandbox image.
+pub const BRIDGE: SandboxExecutable = SandboxExecutable {
+    asset_stem: "clyean-bridge-linux",
+    override_env: "CLYEAN_BRIDGE_BINARY",
+    sibling_name: "clyean-bridge",
+    cache_subdir: "bridge",
+};
+
+impl SandboxExecutable {
+    pub fn asset_name(&self, arch_tag: &str) -> String {
+        format!("{}-{arch_tag}", self.asset_stem)
+    }
+}
+
+/// Where a sandbox executable was found on the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HarnessBinary {
+pub struct ResolvedExecutable {
     pub path: PathBuf,
-    pub origin: HarnessOrigin,
+    pub origin: ExecutableOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HarnessOrigin {
+pub enum ExecutableOrigin {
     EnvironmentOverride,
     ProjectConfig,
     SiblingOfExecutable,
     ReleaseDownload,
 }
 
-pub const HARNESS_BINARY_ENV: &str = "CLYEAN_HARNESS_BINARY";
 pub const RELEASE_REPOSITORY: &str = "skiller3/clyean";
-
-pub fn harness_asset_name(arch_tag: &str) -> String {
-    format!("clyean-harness-linux-{arch_tag}")
-}
-
-pub fn harness_release_url(clyean_version: &str, arch_tag: &str) -> String {
-    release_asset_url(clyean_version, &harness_asset_name(arch_tag))
-}
 
 pub fn release_asset_url(clyean_version: &str, asset: &str) -> String {
     format!("https://github.com/{RELEASE_REPOSITORY}/releases/download/v{clyean_version}/{asset}")
@@ -131,74 +158,90 @@ pub fn digest_from_checksums(checksums: &str, asset: &str) -> Option<String> {
     })
 }
 
-/// Resolves the harness binary in order: environment override, project configuration,
-/// a sibling of the running executable, then the cached release download.
-pub async fn resolve_harness_binary(
+/// Resolves a sandbox executable for the architecture `arch_tag` in order: its environment
+/// override, the project's configured path, a sibling of the running executable, then the
+/// release asset of `clyean_version`, downloaded once into the cache and verified against
+/// the release's `SHA256SUMS`.
+pub async fn resolve_sandbox_executable(
+    executable: &SandboxExecutable,
     project_override: Option<&Path>,
     clyean_version: &str,
     arch_tag: &str,
     cache_dir: &Path,
-) -> Result<HarnessBinary> {
-    if let Some(path) = std::env::var_os(HARNESS_BINARY_ENV) {
-        return existing_binary(PathBuf::from(path), HarnessOrigin::EnvironmentOverride);
+) -> Result<ResolvedExecutable> {
+    if let Some(path) = std::env::var_os(executable.override_env) {
+        return existing(PathBuf::from(path), ExecutableOrigin::EnvironmentOverride);
     }
     if let Some(path) = project_override {
-        return existing_binary(path.to_path_buf(), HarnessOrigin::ProjectConfig);
+        return existing(path.to_path_buf(), ExecutableOrigin::ProjectConfig);
     }
-    if let Some(sibling) = sibling_harness(arch_tag) {
-        return Ok(HarnessBinary {
+    if let Some(sibling) = sibling_of_executable(executable, arch_tag) {
+        return Ok(ResolvedExecutable {
             path: sibling,
-            origin: HarnessOrigin::SiblingOfExecutable,
+            origin: ExecutableOrigin::SiblingOfExecutable,
         });
     }
+    let asset = executable.asset_name(arch_tag);
     let cached = cache_dir
-        .join("harness")
+        .join(executable.cache_subdir)
         .join(clyean_version)
-        .join(harness_asset_name(arch_tag));
+        .join(&asset);
     if !cached.is_file() {
-        let asset = harness_asset_name(arch_tag);
-        let checksums_url = release_asset_url(clyean_version, "SHA256SUMS");
-        let checksums = download_text(&checksums_url).await?;
-        let expected =
-            digest_from_checksums(&checksums, &asset).ok_or_else(|| SandboxError::Download {
-                url: checksums_url.clone(),
-                reason: format!("SHA256SUMS has no entry for {asset}"),
+        download_release_asset(clyean_version, &asset, &cached)
+            .await
+            .map_err(|error| {
+                SandboxError::ExecutableMissing(format!(
+                    "{asset} for clyean {clyean_version} is not available ({error}); set {} to a Linux build of it, or place {} beside the clyean executable",
+                    executable.override_env, executable.sibling_name
+                ))
             })?;
-        let url = harness_release_url(clyean_version, arch_tag);
-        download_to(&url, &cached).await?;
-        let actual = sha256_of(&cached)?;
-        if actual != expected {
-            let _ = std::fs::remove_file(&cached);
-            return Err(SandboxError::Checksum {
-                file: asset,
-                expected,
-                actual,
-            });
-        }
-        set_executable(&cached)?;
     }
-    Ok(HarnessBinary {
+    Ok(ResolvedExecutable {
         path: cached,
-        origin: HarnessOrigin::ReleaseDownload,
+        origin: ExecutableOrigin::ReleaseDownload,
     })
 }
 
-fn existing_binary(path: PathBuf, origin: HarnessOrigin) -> Result<HarnessBinary> {
+async fn download_release_asset(clyean_version: &str, asset: &str, target: &Path) -> Result<()> {
+    let checksums_url = release_asset_url(clyean_version, "SHA256SUMS");
+    let checksums = download_text(&checksums_url).await?;
+    let expected =
+        digest_from_checksums(&checksums, asset).ok_or_else(|| SandboxError::Download {
+            url: checksums_url.clone(),
+            reason: format!("SHA256SUMS has no entry for {asset}"),
+        })?;
+    download_to(&release_asset_url(clyean_version, asset), target).await?;
+    let actual = sha256_of(target)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(target);
+        return Err(SandboxError::Checksum {
+            file: asset.to_string(),
+            expected,
+            actual,
+        });
+    }
+    set_executable(target)
+}
+
+fn existing(path: PathBuf, origin: ExecutableOrigin) -> Result<ResolvedExecutable> {
     if !path.is_file() {
-        return Err(SandboxError::HarnessMissing(format!(
+        return Err(SandboxError::ExecutableMissing(format!(
             "{} does not exist ({origin:?})",
             path.display()
         )));
     }
-    Ok(HarnessBinary { path, origin })
+    Ok(ResolvedExecutable { path, origin })
 }
 
-fn sibling_harness(arch_tag: &str) -> Option<PathBuf> {
+fn sibling_of_executable(executable: &SandboxExecutable, arch_tag: &str) -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    [harness_asset_name(arch_tag), "clyean-harness".to_string()]
-        .into_iter()
-        .map(|name| exe_dir.join(name))
-        .find(|candidate| candidate.is_file())
+    [
+        executable.asset_name(arch_tag),
+        executable.sibling_name.to_string(),
+    ]
+    .into_iter()
+    .map(|name| exe_dir.join(name))
+    .find(|candidate| candidate.is_file())
 }
 
 /// Downloads the pinned PlantUML jar into the cache (verifying its checksum) unless it is
@@ -423,10 +466,11 @@ mod tests {
 
     #[test]
     fn release_url_and_asset_names_follow_the_contract() {
-        assert_eq!(harness_asset_name("arm64"), "clyean-harness-linux-arm64");
+        assert_eq!(HARNESS.asset_name("arm64"), "clyean-harness-linux-arm64");
+        assert_eq!(BRIDGE.asset_name("x64"), "clyean-bridge-linux-x64");
         assert!(release_asset_url("0.2.0", "SHA256SUMS").ends_with("/v0.2.0/SHA256SUMS"));
         assert_eq!(
-            harness_release_url("0.2.0", "x64"),
+            release_asset_url("0.2.0", &HARNESS.asset_name("x64")),
             "https://github.com/skiller3/clyean/releases/download/v0.2.0/clyean-harness-linux-x64"
         );
     }
@@ -453,9 +497,10 @@ mod tests {
     async fn environment_override_must_point_at_an_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
-        let result = resolve_harness_binary(Some(&missing), "0.1.0", "x64", dir.path()).await;
-        if std::env::var_os(HARNESS_BINARY_ENV).is_none() {
-            assert!(matches!(result, Err(SandboxError::HarnessMissing(_))));
+        let result =
+            resolve_sandbox_executable(&HARNESS, Some(&missing), "0.1.0", "x64", dir.path()).await;
+        if std::env::var_os(HARNESS.override_env).is_none() {
+            assert!(matches!(result, Err(SandboxError::ExecutableMissing(_))));
         }
     }
 }
