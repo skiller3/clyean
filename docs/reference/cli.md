@@ -5,7 +5,7 @@ clyean [OPTIONS] [PROMPT]...
 clyean [OPTIONS] <COMMAND>
 ```
 
-Without a command, `clyean` launches the User Assistant in the project's sandbox.  Positional arguments are joined with spaces and sent as the initial prompt.
+Without a command, `clyean` launches a User Assistant of its own in the project's sandbox.  Positional arguments are joined with spaces and sent as the initial prompt.
 
 ## Global options
 
@@ -23,16 +23,18 @@ These apply only when no command is given.
 
 | Option | Effect |
 | --- | --- |
-| `-c`, `--continue` | Continue the User Assistant's previous session. |
+| `-c`, `--continue` | Continue the project's most recent User Assistant session.  When another invocation of the project is running, `clyean` warns that the session may be in use. |
 | `-r`, `--resume [SESSION]` | Resume a session by id prefix or path; without a value, open the session picker. |
 | `--model <MODEL>` | Model or configured role for the User Assistant, for this launch only. |
-| `-p`, `--print` | Non-interactive mode: send the prompt, print the result, exit.  Runs in a fresh container without a pseudo-terminal. |
+| `-p`, `--print` | Non-interactive mode: send the prompt, print the result, exit.  The container gets no pseudo-terminal. |
 | `--no-session` | Do not save the User Assistant session. |
 | `--worktrees <yes|no>` | Answer the Git worktree question of a new project instead of being asked.  Without a terminal on standard input the answer defaults to `no`. |
 | `--image <IMAGE>` | Image to populate a new project's sandbox from (default `docker.io/library/ubuntu:latest`).  Ignored for scaffolded projects. |
 | `--mount <PATH>` | Host path mounted read-only at `/mnt/<base name>` in every agent container; repeatable.  Ignored for scaffolded projects. |
 
-What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; populate and provision the sandbox when missing or outdated; project every agent's profile; start the orchestrator on `$XDG_RUNTIME_DIR/clyean/<project-id>.sock` (or `/tmp/clyean-<uid>/<project-id>.sock`); then either attach to the User Assistant container that is still running from an earlier launch (`podman attach`) or create a new one and start it attached (`podman create`, `podman start --attach --interactive`).  The detach key sequence is Ctrl-p Ctrl-q.  Ctrl-C is passed to the User Assistant rather than terminating the launcher.  When the User Assistant exits, its container is removed; when you detach, it keeps running.
+What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; populate and provision the sandbox when missing or outdated; project every agent's profile; find the static bridge executable (see [environment variables](environment-variables.md)); start the orchestrator inside the `clyean` process; run this invocation's own User Assistant container in the foreground (`podman run --rm --detach-keys=`); and, once the container runs, open its bridge with `podman exec --interactive`.  The User Assistant's harness starts only once the bridge is serving.
+
+Every invocation gets its own container and session, so several invocations of one project can run at once; delegated work stays serialized by the project lock unless the project uses Git worktrees.  Nothing can attach to a running User Assistant, and detaching is disabled.  Ctrl-C is passed to the User Assistant rather than terminating the launcher.  When the User Assistant exits, its container is removed.  When the `clyean` process ends for any other reason, its bridge ends with it, the User Assistant shuts itself down, and Podman removes the container.
 
 ## Commands
 
@@ -55,6 +57,10 @@ Discards `.clyean/container-root` (inside Podman's user namespace, so files owne
 ### `clyean sandbox shell`
 
 Opens an interactive root shell in a maintenance container with the workspace mounted.
+
+### `clyean sandbox prune`
+
+Removes User Assistant containers, in every project, whose `clyean` process is gone: containers more than a minute old that are stopped or have no running bridge process.  They are left behind only when a User Assistant's harness stops responding and cannot shut itself down.  Containers whose processes cannot be listed are kept.
 
 ### `clyean agents`
 

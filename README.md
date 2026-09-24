@@ -25,7 +25,7 @@ The scripts accept `--ref <tag>` (`-Ref <tag>`) for a specific release, `--sourc
 ```sh
 cd ~/workspace/my-project     # any directory, with or without a Git repository
 export ANTHROPIC_API_KEY=...  # or log in with /login once inside
-clyean                        # scaffolds the project and attaches you to the User Assistant
+clyean                        # scaffolds the project and starts your own User Assistant
 ```
 
 Then type what you want, for example `Plan adding a --json flag to the count command`.  The User Assistant scaffolds the project if needed, hands engineering prompts to the Software Engineering Director, relays questions back to you, and reports the change plan under `.clyean/plans`.  Ask it to implement the plan when you have read it.

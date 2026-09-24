@@ -4,14 +4,15 @@ Clyean follows trunk-based development: features land on branches cut from `main
 
 ## What runs on every push
 
-`.github/workflows/ci.yml` runs on every push to any branch and on pull requests.  It calls the reusable `build.yml`, which runs three test jobs and, only when they pass, the release builds:
+`.github/workflows/ci.yml` runs on every push to any branch and on pull requests.  It calls the reusable `build.yml`, which runs the test jobs and, only when they pass, the release builds:
 
 | Job | What it does |
 | --- | --- |
-| `test-rust` | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` with `CLYEAN_PODMAN_TESTS=1` so Podman-backed tests run on the runner. |
+| `test-rust` | On Ubuntu 24.04 (Podman 4.9.3) and Ubuntu 26.04 (Podman 5.7.0): `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, a static build of the bridge, and `cargo test --workspace` with `CLYEAN_PODMAN_TESTS=1` and `CLYEAN_BRIDGE_BINARY` so the Podman-backed tests run on the runner. |
 | `test-extensions` | `bun test extensions` for the two harness extensions against stub socket servers. |
 | `test-harness` | Installs the vendored harness's dependencies, stages the prebuilt native addons for the vendored version from npm, runs `--version`, and runs the welcome screen tests. |
 | `build-cli` | Builds `clyean` for the six host targets: `clyean-linux-x64`, `clyean-linux-arm64`, `clyean-darwin-x64`, `clyean-darwin-arm64`, `clyean-windows-x64.exe`, `clyean-windows-arm64.exe`. |
+| `build-bridge` | Builds the static (musl) bridge for Linux x64 and arm64 as `clyean-bridge-linux-x64` and `clyean-bridge-linux-arm64`, and checks that they are statically linked. |
 | `build-harness` | Compiles the contained harness with bun for Linux x64 and arm64 as `clyean-harness-linux-x64` and `clyean-harness-linux-arm64`. |
 | `publish` | Only with a release tag: writes `SHA256SUMS` and attaches every asset to the GitHub release for that tag. |
 

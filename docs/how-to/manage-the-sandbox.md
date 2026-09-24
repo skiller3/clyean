@@ -50,7 +50,7 @@ Images must provide `apt-get`, `apk`, or `dnf`.  The default is `docker.io/libra
 }
 ```
 
-Each mount appears read-only at `/mnt/<base name>` in every agent container.  `podmanRunArgs` are appended verbatim to every `podman run` and `podman create` Clyean issues, which is the way to add resource limits, network options, or arbitrary environment variables.  Provider credentials do not need it: host variables matching the credential patterns listed in [Configure agents](configure-agents.md) are passed through automatically, and `sandbox.passthroughEnv` extends the list.  `--mount` and `--image` on the command line set the same values when a project is scaffolded.
+Each mount appears read-only at `/mnt/<base name>` in every agent container.  `podmanRunArgs` are appended verbatim to every `podman run` Clyean issues for an agent container, which is the way to add resource limits, network options, or arbitrary environment variables.  Provider credentials do not need it: host variables matching the credential patterns listed in [Configure agents](configure-agents.md) are passed through automatically, and `sandbox.passthroughEnv` extends the list.  `--mount` and `--image` on the command line set the same values when a project is scaffolded.
 
 ## Where the harness comes from
 
@@ -65,4 +65,14 @@ The architecture is the one Podman reports for the host.  Development builds and
 
 ## What is shared and what is not
 
-Shared by every agent of a project: the root filesystem, packages installed into it, the workspace mount, and the passed-through credential variables.  Separate per agent: the harness profile under `/home/<user>/.omp/profiles/<agent-id>/agent/` (settings, MCP servers, sessions, and the credential store, which by default is copied from the User Assistant's profile when a sub-agent starts; see `sandbox.inheritCredentials`).  Separate per unit of work: the sub-agent containers, which are created for one unit of work and removed when it ends.  The User Assistant container persists while it runs and is removed when the User Assistant exits.
+Shared by every agent of a project: the root filesystem, packages installed into it, the workspace mount, and the passed-through credential variables.  Separate per agent: the harness profile under `/home/<user>/.omp/profiles/<agent-id>/agent/` (settings, MCP servers, sessions, and the credential store, which by default is copied from the User Assistant's profile when a sub-agent starts; see `sandbox.inheritCredentials`).  Separate per unit of work: the sub-agent containers, which are created for one unit of work and removed when it ends.  Separate per `clyean` invocation: the User Assistant container, which is removed when the invocation ends.
+
+## Remove containers left behind
+
+A User Assistant shuts itself down when its `clyean` process ends, and Podman then removes its container.  A harness that has stopped responding cannot do that, and its container stays up without a bridge.  To remove such containers, in every project:
+
+```sh
+clyean sandbox prune
+```
+
+It removes User Assistant containers more than a minute old that are stopped or have no running bridge, and leaves running ones alone.  For containers stranded by a host crash, enable Podman's `podman-clean-transient.service`, which removes them at the next boot.
