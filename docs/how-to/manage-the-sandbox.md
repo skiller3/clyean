@@ -50,7 +50,7 @@ Images must provide `apt-get`, `apk`, or `dnf`.  The default is `docker.io/libra
 }
 ```
 
-Each mount appears read-only at `/mnt/<base name>` in every agent container.  `podmanRunArgs` are appended verbatim to every `podman run` Clyean issues for an agent container, which is the way to add resource limits, network options, or arbitrary environment variables.  Provider credentials do not need it: host variables matching the credential patterns listed in [Configure agents](configure-agents.md) are passed through automatically, and `sandbox.passthroughEnv` extends the list.  `--mount` and `--image` on the command line set the same values when a project is scaffolded.
+Each mount appears read-only at `/mnt/<base name>` in every agent container.  `podmanRunArgs` are appended verbatim to every `podman run` Clyean issues for an agent container, which is the way to add resource limits, network options, or arbitrary environment variables.  Provider credentials do not need it: each agent receives the host variables of its providers automatically, as [Configure agents](configure-agents.md#credentials-for-the-agents) describes, and `sandbox.passthroughEnv` passes further variables to the agents it names.  `--mount` and `--image` on the command line set the same values when a project is scaffolded.
 
 ## Where the harness comes from
 
@@ -65,7 +65,7 @@ The architecture is the one Podman reports for the host.  Development builds and
 
 ## What is shared and what is not
 
-Shared by every agent of a project: the root filesystem, packages installed into it, the workspace mount, and the passed-through credential variables.  Separate per agent: the harness profile under `/home/<user>/.omp/profiles/<agent-id>/agent/` (settings, MCP servers, sessions, and the credential store, which by default is copied from the User Assistant's profile when a sub-agent starts; see `sandbox.inheritCredentials`).  Separate per unit of work: the sub-agent containers, which are created for one unit of work and removed when it ends.  Separate per `clyean` invocation: the User Assistant container, which is removed when the invocation ends.
+Shared by every agent of a project: the root filesystem, packages installed into it, and the workspace mount.  Separate per agent: the harness profile under `/home/<user>/.omp/profiles/<agent-id>/agent/` (settings, MCP servers, sessions, and the login store), which only that agent's containers can see, and the host variables it receives.  Sub-agents hold copies of the User Assistant's sign-ins, which Clyean replaces every time a sub-agent starts.  Separate per unit of work: the sub-agent containers, which are created for one unit of work and removed when it ends.  Separate per `clyean` invocation: the User Assistant container, which is removed when the invocation ends.
 
 ## Remove containers left behind
 

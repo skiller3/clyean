@@ -36,7 +36,8 @@ The User Assistant's orchestration extension holds a lease: one `session.lease` 
 | --- | --- | --- |
 | `/home/<user>` | `HOME` of every agent process.  `<user>` is the host user name (lower-cased, non-alphanumerics replaced by `-`). | yes |
 | `/home/<user>/workspace/<workspace-name>` | Bind mount of the host workspace directory.  `<workspace-name>` is the base name of the host workspace directory. | yes (read-write mount) |
-| `/home/<user>/.omp/profiles/<agent-id>/agent/` | The harness profile of one agent: `settings.json`, `AGENTS.md`, `extensions/`, and the harness's own state (sessions, caches). | yes |
+| `/home/<user>/.omp/profiles/<agent-id>/agent/` | The harness profile of the container's own agent: `settings.json`, `AGENTS.md`, `extensions/`, its login store (`agent.db`), and the harness's own state (sessions, caches).  No other agent's profile is visible. | yes |
+| `/home/<user>/.omp/profiles/<agent-id>/agent/clyean-credentials.json` | The credential copies delivered to a sub-agent, readable by its owner only, from the sub-agent's launch until its credentials extension imports and deletes them. | yes |
 | `/usr/local/bin/clyean` | The contained harness binary (the Clyean fork of Oh-My-Pi, Linux build). | no by convention |
 | `/opt/plantuml/plantuml-mit-<version>.jar` | The pinned MIT-licensed PlantUML distribution. | no by convention |
 | `/opt/plantuml/plantuml.jar` | Symbolic link to the pinned jar. | no by convention |
@@ -49,12 +50,16 @@ The User Assistant's orchestration extension holds a lease: one `session.lease` 
 
 The project directory inside the container is the workspace mount joined with the project's path relative to the host workspace directory.  The path `.clyean/container-root` under the mounted project directory is masked with an empty `tmpfs` so that agents never see or traverse the root filesystem through the workspace mount.
 
-Some directories get a private, empty `tmpfs` in each container, so that no container reaches another's sockets through the shared root filesystem:
+Some directories get a private, empty `tmpfs` in each container, so that no container reaches another's sockets or login store through the shared root filesystem:
 
 | Path | Containers |
 | --- | --- |
 | `/run/clyean`, `/run/herdr` | User Assistant |
 | `/home/<user>/.omp/run` and `/home/<user>/.omp/profiles/<agent-id>/run`, where the harness keeps the sockets of its daemons | User Assistant and sub-agents |
+| `/home/<user>/.omp/profiles`, with the container's own agent's profile directory bind-mounted back from the root filesystem at `/home/<user>/.omp/profiles/<agent-id>` | User Assistant and sub-agents; maintenance containers get the empty directory only |
+| `/home/<user>/.omp/agent`, which no profile reads | every container |
+
+Files that every profile reads, such as `~/.env` in the sandbox home, stay shared.  Clyean never writes one, and secrets do not belong there.
 
 Agent processes run as UID 0 inside the container.  Under rootless Podman that UID is the host user, so every file an agent creates in the workspace is owned by the host user.
 
@@ -69,6 +74,7 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | `CLYEAN_HOST_WORKSPACE_DIR` | Absolute host path of the workspace directory. | all agents |
 | `CLYEAN_HOST_CONTAINER_ROOT` | Absolute host path of `.clyean/container-root`. | all agents |
 | `CLYEAN_WORK_ID` | Identifier of the unit of work the agent was started for. | sub-agents |
+| `CLYEAN_CREDENTIALS_BUNDLE` | Path of the agent's credential bundle file (see "Credentials"). | sub-agents |
 | `CLYEAN_ORCHESTRATOR_SOCKET` | `/run/clyean/orchestrator.sock` | User Assistant |
 | `CLYEAN_ORCHESTRATOR_LEASE` | `1`: hold the orchestrator lease and shut down when it ends. | User Assistant |
 | `HOME` | `/home/<user>` | all agents |
@@ -79,9 +85,35 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | `HERDR_SOCKET_PATH` | `/run/herdr/herdr.sock` | User Assistant, inside Herdr |
 | `HERDR_BIN_PATH` | `/usr/local/bin/herdr` | User Assistant, inside Herdr, when `herdr` exists on the host |
 
-Provider credentials reach the containers two ways.  First, host environment variables whose names match `*_API_KEY`, `*_API_TOKEN`, or `*_BASE_URL`, the AWS, Azure OpenAI, and Google Cloud credential variables, and the auth broker variables are passed into every agent container; `sandbox.passthroughEnv` in `project.json` adds exact names or `*` glob patterns.  Second, unless `sandbox.inheritCredentials` is `false`, every sub-agent starts with a copy of the User Assistant's credential store (`agent.db` and its journal files) taken from the User Assistant's profile, so a `/login` performed in the User Assistant applies to the other agents from their next start.  An agent whose profile should hold different credentials needs `inheritCredentials` off and its own login.
+Host variables that carry credentials or configuration are selected per agent; see "Credentials".
 
 Translating a container path to its host equivalent, which the Herdr reporter needs for session files, follows two rules: a path under `CLYEAN_WORKSPACE_DIR` maps to the same relative path under `CLYEAN_HOST_WORKSPACE_DIR`; any other path maps to the same path under `CLYEAN_HOST_CONTAINER_ROOT`.  Paths under `/run` and `/mnt` have no host equivalent.
+
+## Credentials
+
+Every agent has its own login store, the harness's credential store in its own profile.  Every sign-in is made in the User Assistant's store; the other agents hold copies.
+
+When a sub-agent starts, the orchestrator reads the agent's configuration from `.clyean/agents` on the host: the model patterns in the model roles and fallback chains of its settings overlay, and the remote servers of its MCP seed.  It then asks the User Assistant, over the User Assistant's lease connection (see [the orchestrator protocol](orchestrator-protocol.md#credential-requests-on-the-lease)), for three things:
+
+1. `credentials.resolve`: the provider of each model pattern, resolved with the harness's own resolver, and the User Assistant's current model.
+2. `credentials.variables`: the environment variables the harness reads for each of those providers.
+3. `credentials.copies`: copies of the User Assistant's credentials for those providers and servers.  The User Assistant first refreshes any sign-in that expires within fifteen minutes.  Copies carry an empty refresh token and no client secret, and each MCP credential is keyed to the receiving agent's profile (`mcp_oauth:profile:<agent-id>:<server address>`).
+
+The model the sub-agent runs with is the first pattern of its default model role that names a model the User Assistant or the host environment can supply, or, when its overlay names no default model, the User Assistant's current model.  It is passed to the harness with `--model`.  When no candidate can be supplied, the sub-agent does not start and the unit of work fails with a message naming the sign-in to add.
+
+The orchestrator writes the copies to the sub-agent's bundle file with mode `0600` and starts the container with `CLYEAN_CREDENTIALS_BUNDLE` set.  The agent's credentials extension, which loads before the harness decides which models are available, deletes every credential its store holds, imports the copies, and deletes the file.
+
+A copy is renewed rather than refreshed.  The credentials extension registers each model provider it holds an OAuth copy for, so when the harness would refresh that copy, it instead sends an extension UI request with the title `clyean:credentials` and a placeholder naming what it needs (`{"providers": [...]}` or `{"mcp_servers": [...]}`).  It sends the same request ten minutes before an MCP copy expires.  The orchestrator answers only for the providers and servers computed when the agent started, with fresh copies from the User Assistant, and ignores other UI requests.
+
+Host variables reach agents as follows:
+
+| Agent | Host variables it receives |
+| --- | --- |
+| User Assistant | Names matching `*_API_KEY`, `*_API_TOKEN`, or `*_BASE_URL`, the AWS, Azure OpenAI, and Google Cloud credential variables, and every `sandbox.passthroughEnv` entry written as a string |
+| Sub-agent | The variables the harness reads for its models' providers, and every `sandbox.passthroughEnv` entry written as an object that lists the agent |
+| Maintenance container | None |
+
+The harness's auth broker variables never pass through on their own.  `clyean scaffold --project-type` starts the Scaffolder without a User Assistant; it then receives the User Assistant's host variables and an empty bundle, which clears copies from earlier runs.
 
 ## Agent identifiers
 
@@ -102,7 +134,7 @@ Before an agent container starts, the host projects the agent's configuration in
 
 - `.clyean/agents/AGENTS__<NAME>.md` followed by `.clyean/agents/AGENTS__<NAME>.local.md` (when present) becomes `/home/<user>/.omp/profiles/<agent-id>/agent/AGENTS.md`.
 - `.clyean/agents/<NAME>.omp.json` deep-merged with `.clyean/agents/<NAME>.omp.local.json` (when present) becomes `/home/<user>/.omp/profiles/<agent-id>/agent/settings.json`.  The file uses the harness's own settings schema, so MCP servers, models, and tool settings are scoped to the agent that owns the file.
-- The Clyean-managed extensions are written to `/home/<user>/.omp/profiles/user-assistant/agent/extensions/`.  Each carries a `CLYEAN_EXTENSION_VERSION` marker and is overwritten whenever the marker is behind the running `clyean` version.
+- The Clyean-managed extensions are written to the profile's `extensions/` directory: the Herdr reporter and the orchestration extension for the User Assistant, and the credentials extension for every other agent.  Each carries a `CLYEAN_EXTENSION_VERSION` marker and is overwritten whenever the marker is behind the running `clyean` version.
 
 ## Git identity of commits
 

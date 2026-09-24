@@ -16,7 +16,7 @@ Deep merge means objects merge key by key, other values are replaced, and a JSON
 
 Clyean re-projects all of this into `.clyean/container-root/home/<user>/.omp/profiles/<agent-id>/agent/` on every launch, so edits take effect the next time the agent starts.
 
-## Pin an agent's model
+## Choose an agent's model
 
 Set the harness's default model role in the settings overlay.  The Programmer, for example:
 
@@ -26,6 +26,8 @@ Set the harness's default model role in the settings overlay.  The Programmer, f
   "modelRoles": {"default": "anthropic/claude-opus-5"}
 }
 ```
+
+An agent whose overlay names no default model runs with the User Assistant's current model at the moment the agent starts, which Clyean passes to its harness with `--model`.  The overlay's other model roles and its `retry.fallbackChains` work as they do in the harness, and the agent receives credentials for their providers too (see below).
 
 Keep `tools.approvalMode` at `yolo` for the sub-agents: nobody is there to approve their tool calls, and Clyean also passes `--approval-mode yolo` on their command line.  The User Assistant's overlay starts empty so that the harness default applies and `/model` switches persist in its profile.
 
@@ -47,20 +49,36 @@ Write `AGENTS__<NAME>.local.md` next to the tracked file.  Its content is append
 
 ## Credentials for the agents
 
-Provider credentials reach the agents two ways, and both are on by default.
+Every agent has its own login store: the credential store in its own profile, which no other agent's container can see.  You sign in only through the User Assistant, for example with `/login`, and Clyean gives each other agent copies of the credentials it needs.
 
-1. Environment passthrough.  Host variables whose names match `*_API_KEY`, `*_API_TOKEN`, or `*_BASE_URL`, the AWS variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK`), `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `OMP_AUTH_BROKER_URL`, and `OMP_AUTH_BROKER_TOKEN` are copied into every agent container.  Add names or `*` glob patterns (a leading or trailing `*`) with `sandbox.passthroughEnv`:
+- When a sub-agent starts, Clyean works out the providers of the models its overlay names (the default model or else the User Assistant's, the other model roles, and the fallback chains) and the servers in its `<NAME>.mcp.json` that the User Assistant holds a sign-in for.  It asks the User Assistant for copies of those credentials only, and the copies replace everything the sub-agent's store held, so a sign-out in the User Assistant reaches every agent by its next start.
+- A copy lets an agent use a credential but not refresh it.  Before a copy expires, the agent asks Clyean for a new one, and the User Assistant refreshes its own sign-in when needed and hands over a fresh copy, even in the middle of a turn.
+- Host environment variables reach only the agents that need them.  The User Assistant receives every host variable whose name matches `*_API_KEY`, `*_API_TOKEN`, or `*_BASE_URL`, the AWS variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK`), `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`.  A sub-agent receives only the variables the harness reads for its models' providers, for example `OPENAI_API_KEY`, or the AWS variables for Amazon Bedrock.
+- When neither the User Assistant nor the host environment can supply the model an agent runs with, Clyean does not start the agent, and the work fails with a message naming the sign-in or variable to add.
 
-   ```json
-   {"sandbox": {"passthroughEnv": ["MY_PROVIDER_SECRET", "CORP_*"]}}
-   ```
+Other host variables pass through only when the project names them in `sandbox.passthroughEnv`.  An entry written as a string reaches the User Assistant only; an entry written as an object reaches the agents it lists by identifier (see [the agent identifiers](../reference/sandbox-contract.md#agent-identifiers)):
 
-   Export `ANTHROPIC_API_KEY` (or the variable your provider reads) before running `clyean` and every agent can use it.
+```json
+{"sandbox": {"passthroughEnv": [
+  "CORP_PROXY_TOKEN",
+  {"name": "GH_TOKEN", "agents": ["software-engineering-director"]}
+]}}
+```
 
-2. Credential inheritance.  Unless `sandbox.inheritCredentials` is `false`, each sub-agent starts with a copy of the User Assistant's credential store (`agent.db` and its journal files) taken from the User Assistant's profile.  A `/login` performed in the User Assistant therefore applies to the other agents from their next start.  Set `inheritCredentials` to `false` when an agent must hold different credentials; that agent then needs its own login, for example through a passed-through variable or by editing its profile.
+Names may be exact or `*` glob patterns with a leading or trailing `*`.  Put the setting in `project.local.json` when it should stay off the record.  The harness's auth broker variables (`OMP_AUTH_BROKER_URL` and `OMP_AUTH_BROKER_TOKEN`) never pass through on their own, because a broker hands every client every credential it holds.
 
-Put either setting in `project.local.json` when it should stay off the record.  When neither mechanism supplies a credential, a sub-agent's harness exits with `No models available` and the work fails with that message.
+`clyean scaffold --project-type` runs the Scaffolder without a User Assistant.  Nothing can then resolve the Scaffolder's needs or supply copies, so the Scaffolder receives the host variables the User Assistant would, and no copies.
+
+## Sign in to an MCP server for another agent
+
+An MCP server configured only for another agent still takes its sign-in from the User Assistant.  In the User Assistant, run:
+
+```text
+/clyean sign-in <agent> <server>
+```
+
+`<agent>` is the agent's identifier, for example `software-engineering-director`, and `<server>` a server name from that agent's `<NAME>.mcp.json` or its local companion.  Clyean runs the harness's MCP sign-in for the server, shows the address to open, and records the sign-in in the User Assistant's login store, from which the agent receives a copy the next time it starts.  The sign-in's callback listens inside the User Assistant's container, where your browser cannot reach it, so when the browser cannot return to Clyean, paste the address it ended on when Clyean asks for it.
 
 ## What the slash commands affect
 
-Inside the User Assistant, `/model`, `/switch`, `/login`, `/logout`, and `/mcp` apply to the User Assistant's profile and say so in their descriptions (`(agent: user-assistant)`).  Other agents are configured only through the files above; `clyean agents` lists them and shows which instruction files exist.
+Inside the User Assistant, `/model`, `/switch`, `/login`, `/logout`, and `/mcp` apply to the User Assistant's profile and say so in their descriptions (`(agent: user-assistant)`).  Sign-ins made there reach the other agents as copies; everything else about the other agents is configured only through the files above.  `clyean agents` lists them and shows which instruction files exist.
