@@ -17,7 +17,7 @@ use clyean_orchestrator::service::{
     NoopRenderer, OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
 };
 use clyean_orchestrator::StreamedEvent as Event;
-use clyean_project::{PlanCatalog, ProjectDirectory, ProjectLayout, ProjectType};
+use clyean_project::{PlanCatalog, ProjectDirectory, ProjectLayout, ProjectLock, ProjectType};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -423,8 +423,10 @@ async fn research_returns_the_directors_answer_and_journals_under_work() {
     assert_eq!(journals.len(), 1);
 }
 
-#[tokio::test]
-async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
+/// A project that is not scaffolded yet, whose Scaffolder reports `summary`.
+async fn unscaffolded_fixture(
+    summary: &str,
+) -> (tempfile::TempDir, ProjectLayout, Arc<OrchestratorService>) {
     let dir = tempfile::tempdir().unwrap();
     let directory = ProjectDirectory::resolve(Some(dir.path()), None).unwrap();
     let layout = ProjectLayout::new(directory.project());
@@ -434,7 +436,7 @@ async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
         .script(
             AgentId::Scaffolder,
             [verdict(
-                json!({"decision": "completed", "summary": "documented the CLI"}),
+                json!({"decision": "completed", "summary": summary}),
             )],
         )
         .await;
@@ -442,7 +444,7 @@ async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
         ProjectState::Unscaffolded(Box::new(UnscaffoldedProject {
             directory,
             layout: layout.clone(),
-            git: git.clone(),
+            git,
             pending: PendingScaffold::default(),
             renderer: Arc::new(NoopRenderer),
             factory,
@@ -450,6 +452,30 @@ async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
         })),
         "0.1.0",
     ));
+    (dir, layout, service)
+}
+
+#[tokio::test]
+async fn scaffolding_waits_out_a_lock_released_moments_later() {
+    // A child process forked while the lock file is open keeps the lock until it execs;
+    // holding the lock through a second open file for a moment reproduces that window.
+    let (_dir, layout, service) = unscaffolded_fixture("scaffolded").await;
+    let held = ProjectLock::acquire(&layout, false).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        drop(held);
+    });
+    let (response, _) = call(&service, json!({"id": "x", "method": "project.scaffold", "params": {"project_type": "SOFTWARE_ENGINEERING_PROJECT"}})).await;
+    release.join().unwrap();
+    assert_eq!(
+        response["result"]["type"], "work_accepted",
+        "unexpected response: {response}"
+    );
+}
+
+#[tokio::test]
+async fn unscaffolded_projects_report_status_and_scaffold_through_the_agent() {
+    let (_dir, layout, service) = unscaffolded_fixture("documented the CLI").await;
     let (status, _) = call(&service, json!({"id": "s", "method": "project.status"})).await;
     assert_eq!(status["result"]["scaffolded"], false);
     assert_eq!(status["result"]["project_type"], Value::Null);
