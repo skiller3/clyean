@@ -2,11 +2,14 @@
 # beside itself.  The commands live in crates/xtask; the bridge and the harness are Linux
 # executables for the architecture Podman runs containers on, so they need a Linux host
 # (including WSL), the rustup musl target for that architecture, and bun.
+# Verbosity flags go after the command name, as for any cargo command (`cargo build-bin -v`,
+# `cargo build-cli -q`), and reach every command it runs.  Cargo's own lines about building
+# and starting xtask need the flag before the name as well: `cargo -q build-bin -q`.
 [alias]
 # clyean, the static bridge, and the harness.
-build-bin = "run -v -p xtask -- build-bin"
+build-bin = "run -p xtask -- build-bin"
 buildlocal = "build-bin"
 # clyean alone.
-build-cli = "run -v -p xtask -- build-cli"
+build-cli = "run -p xtask -- build-cli"
 # The static bridge alone.
-build-bridge = "run -v -p xtask -- build-bridge"
+build-bridge = "run -p xtask -- build-bridge"
