@@ -1,6 +1,6 @@
 [package]
 name = "clyean"
-description = "Clyean: a zero-slop agentic coding harness that coordinates sandboxed specialized agents"
+description = "Clyean: the slop-scrubbing agentic coding harness"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

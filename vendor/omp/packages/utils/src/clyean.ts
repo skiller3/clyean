@@ -13,6 +13,12 @@ export function getClyeanAgent(env: NodeJS.ProcessEnv = process.env): string | u
 	return value ? value : undefined;
 }
 
+/** Version of the `clyean` host program that launched this harness, or undefined outside a Clyean sandbox. */
+export function getClyeanVersion(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const value = env.CLYEAN_VERSION?.trim();
+	return value ? value : undefined;
+}
+
 /** Suffix such as " (agent: user-assistant)" for descriptions of agent-scoped commands, or "" outside Clyean. */
 export function agentScopeSuffix(env: NodeJS.ProcessEnv = process.env): string {
 	const agent = getClyeanAgent(env);

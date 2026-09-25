@@ -17,6 +17,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
+import { getClyeanVersion } from "@oh-my-pi/pi-utils/clyean";
 import { $env, isBunTestRuntime, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -2336,7 +2337,7 @@ export async function runRootCommand(
 					logger.endTiming();
 					await runInteractiveMode(
 						session,
-						VERSION,
+						getClyeanVersion() ?? "",
 						startupChangelog,
 						notifs,
 						versionCheckPromise,

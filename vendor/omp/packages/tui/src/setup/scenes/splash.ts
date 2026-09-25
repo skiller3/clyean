@@ -1,21 +1,19 @@
 import { centerLine, visibleWidth } from "../../utils";
 import { padToWidth } from "../../render/utils";
-import { BRAND_LOGO, gradientEscape, gradientLogo, type ShineConfig } from "../../prompt/welcome";
+import {
+	BRAND_LOGO,
+	BRAND_LOGO_HEIGHT,
+	BRAND_LOGO_WIDTH,
+	gradientEscape,
+	gradientLogo,
+	paintLogo,
+	type ShineConfig,
+} from "../../prompt/welcome";
 import { theme } from "../../theme/theme";
 
 export const SETUP_SPLASH_MS = 2600;
 export const SETUP_TICK_MS = 33;
 
-/** Brand mark at 2x: every glyph doubled horizontally, every row doubled vertically. */
-const LARGE_LOGO = BRAND_LOGO.flatMap(line => {
-	let wide = "";
-	for (const char of line) {
-		wide += char === " " ? "  " : `${char}${char}`;
-	}
-	return [wide, wide];
-});
-const LOGO_WIDTH = Math.max(...LARGE_LOGO.map(line => visibleWidth(line)));
-const LOGO_HEIGHT = LARGE_LOGO.length;
 const RESET = "\x1b[0m";
 
 /** Full scene needs comfortable room; below this we drop to a centered mark. */
@@ -106,7 +104,7 @@ function waterAmplitude(
 }
 
 /**
- * Animated setup splash, in the spirit of the omp landing page: the brand π
+ * Animated setup splash, in the spirit of the omp landing page: the brand soap
  * mark rendered with the live diagonal gradient + shine sweep, rising out of a
  * rippling, gradient-lit water surface, under a faint twinkling starfield. The
  * mark and water share one continuous gradient so the sweep reads across the
@@ -131,9 +129,9 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 		if (y >= 0 && y < h && x >= 0 && x < w) cells[y][x] = glyph;
 	};
 
-	const hx = Math.floor((w - LOGO_WIDTH) / 2);
+	const hx = Math.floor((w - BRAND_LOGO_WIDTH) / 2);
 	const hy = Math.max(2, Math.floor(h * 0.16));
-	const waterTop = hy + LOGO_HEIGHT;
+	const waterTop = hy + BRAND_LOGO_HEIGHT;
 	const waterHeight = Math.max(1, h - waterTop);
 
 	// 1. rippling water surface (shares the screen-wide gradient with the mark)
@@ -152,18 +150,11 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 		}
 	}
 	// 3. hero — the brand mark with the live gradient + shine sweep
-	LARGE_LOGO.forEach((line, row) => {
-		let col = 0;
-		for (const ch of line) {
-			if (ch !== " ") {
-				put(
-					hx + col,
-					hy + row,
-					gradientEscape(screenGradientT(hx + col, hy + row, w, h, phase), shine) + ch + RESET,
-				);
-			}
-			col++;
-		}
+	const logo = paintLogo(BRAND_LOGO, (x, y) => screenGradientT(hx + x, hy + y / 2, w, h, phase), phase, shine);
+	logo.forEach((logoCells, row) => {
+		logoCells.forEach((cell, offset) => {
+			if (cell) put(hx + offset, hy + row, cell);
+		});
 	});
 	// 4. skip hint on a cleared strip at the bottom so it stays legible over the water
 	const hintWidth = visibleWidth(SKIP_HINT);
@@ -178,8 +169,7 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 
 /** Centered fallback for windows too small to hold the full scene. */
 function renderCompactSplash(width: number, height: number, phase: number, shine: ShineConfig): string[] {
-	const art = height >= 14 ? LARGE_LOGO : BRAND_LOGO;
-	const content = [...gradientLogo(art, phase, shine), "", theme.bold("C l y e a n")];
+	const content = [...gradientLogo(BRAND_LOGO, phase, shine), "", theme.bold("C l y e a n")];
 	const start = Math.max(0, Math.floor((height - content.length) / 2));
 	const lines: string[] = [];
 	for (let y = 0; y < height; y++) {

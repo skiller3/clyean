@@ -1,8 +1,9 @@
 # Basic User Experience
 From a UX perspective, `clyean` is primarily a CLI program that launches a terminal UI (TUI) in which the user performs agentic programming (a.k.a vibe coding) and other LLM-based tasks (e.g. research, modeling, authoring).  The CLI/TUI should behave identically to Oh-My-Pi (`https://omp.sh/`; `https://github.com/can1357/oh-my-pi`) with the following modifications:
   - Titles, headers, and text should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".  However, the TUI welcome page should prominently display the text "Clyean uses the fabulous Oh-My-Pi (https://omp.sh/) harness!"
-  - CLI help text and messages should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".
-  - The "Pi" symbol logo should be replaced with a "Clyean" logo (and iconography) you invent.  The project's logo should be reminiscent of a bar of soap.
+  - The TUI welcome page's title shows the version of the `clyean` program that launched the harness, not the contained harness's own version.  The page shows no placeholder text (such as "Unknown") for details it does not have yet, such as the model before one is selected.
+  - CLI help text and messages should be rebranded from "omp" and "Oh-My-Pi" to "clyean" and "Clyean".  `clyean -h` introduces the program as "Clyean: the slop-scrubbing agentic coding harness".
+  - The "Pi" symbol logo should be replaced with Clyean's logo, `assets/clyean-logo.svg`: a bar of soap with a glossy highlight band and rising bubbles, with no smile or other face.  The TUI's welcome and setup views show a rendition of it in terminal characters that new users readily recognize as a bar of soap.
   - `omp` commandline arguments/options that are non-coherent given Clyean's goals or complicated to implement due to its architecture should be eliminated.
   - `omp` TUI configuration, options, commands (including slash commands), and overall functionality that is non-coherent given the Clyean's goals or complicated to implement given its architecture should be eliminated.
   - MCP (`/mcp`) commands and server connections should be supported with the enhancement of generally being scoped to particular agents (it shouldn't be assumed that all agents that coordinate to perform a unit of work should have access to the same MCP servers).

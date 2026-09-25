@@ -4,7 +4,7 @@ import { centerLine, padding } from "../utils";
 import { padToWidth } from "../render/utils";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
-import { BRAND_LOGO, gradientLogo } from "../prompt/welcome";
+import { BRAND_LOGO, BRAND_LOGO_HEIGHT, gradientLogo } from "../prompt/welcome";
 import { theme } from "../theme/theme";
 import type { SetupHost } from "./scenes/types";
 import { renderSetupOutro, SETUP_OUTRO_MS } from "./scenes/outro";
@@ -15,6 +15,8 @@ type WizardPhase = "splash" | "transition" | "scene" | "outro" | "done";
 
 const SCENE_MARGIN_X = 4;
 const MIN_CONTENT_WIDTH = 20;
+/** Scene rows the header must leave free to show the logo; shorter terminals get the scene without it. */
+const MIN_SCENE_ROWS_WITH_LOGO = 10;
 /** Cross-dissolve duration from the splash into the first scene. */
 const SCENE_TRANSITION_MS = 420;
 
@@ -185,10 +187,8 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 		const title = this.#activeScene?.title ?? scene?.title ?? "Setup";
 		const subtitle = this.#activeScene?.subtitle;
 		const contentWidth = Math.max(MIN_CONTENT_WIDTH, width - SCENE_MARGIN_X * 2);
-		const logo = gradientLogo(BRAND_LOGO, 0);
 		const header = [
 			"",
-			...logo.map(line => centerLine(line, width)),
 			centerLine(theme.bold(theme.fg("accent", PRODUCT_NAME)), width),
 			centerLine(theme.fg("muted", `Setup step ${this.#sceneIndex + 1} of ${this.scenes.length}`), width),
 			"",
@@ -198,12 +198,15 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 			header.push(indentLine(theme.fg("muted", subtitle), width, SCENE_MARGIN_X));
 		}
 		header.push("");
-		this.#bodyRowStart = header.length;
 
 		const footer = [
 			"",
 			centerLine(theme.fg("dim", "↑/↓ select · enter confirm · esc skip · ctrl+c exit setup"), width),
 		];
+		if (height - header.length - footer.length - BRAND_LOGO_HEIGHT >= MIN_SCENE_ROWS_WITH_LOGO) {
+			header.splice(1, 0, ...gradientLogo(BRAND_LOGO, 0).map(line => centerLine(line, width)));
+		}
+		this.#bodyRowStart = header.length;
 		const maxBodyLines = Math.max(0, height - header.length - footer.length);
 		const body = this.#activeScene?.render(contentWidth, maxBodyLines).slice(0, maxBodyLines) ?? [];
 		const lines = [...header, ...body.map(line => indentLine(line, width, SCENE_MARGIN_X))];
