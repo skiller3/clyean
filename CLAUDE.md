@@ -41,6 +41,7 @@ This project was born from frustration with Slop Debt (see `https://arpitbhayani
   - Author and maintain a Github CI/CD workflow that executes upon every commit to any branch.  The workflow should:
     - Execute all unit and integration tests
     - Conditioned upon the preceding automated tests passing, build a release of the `clyean` CLI from the branch for all supported operating systems (Linux, MacOS, Windows) and CPU architectures (x86 / x64, ARM)
+  - Do not wait for the Github workflows and actions that comprise Clyean's CI/CD workflow to complete, or spawn a sub-agent that waits for them to complete.   
   - Author and maintain a Github workflow to cut an appropriately named release branch from trunk and tag its head appropriately.  Releases should comply with standard semantic versioning (`https://semver.org/`), and tags should reflect the semver version of the software. Major version updates should only be achievable via manual tagging by me, but the "cut release" Github workflow should apply a tag in which the minor version is incremented on the head of the branch it creates.  The "cut release" Github workflow should be designed to be manually invoked by me.
   - Author and maintain a Github workflow that automatically tags each new commit to release branches with an incremented semver patch version.
 - As we work together, continuously update `GENERAL_SPECS.md` and `AGENT_SPECS.md` to reflect the latest specified requirements.  Review and refactor the file as useful upon each edit to ensure requirements coherency and consistency. 
