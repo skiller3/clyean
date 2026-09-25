@@ -8,9 +8,11 @@ import {
 	environmentSandbox,
 	importFresh,
 	shortSocketPath,
+	sleep,
 	startStubOrchestrator,
 	type StubOrchestrator,
 	type StubReply,
+	waitFor,
 } from "./harness";
 
 const BRIDGE_MODULE = "../clyean-orchestration.ts";
@@ -384,4 +386,72 @@ test("a planning work resumed after restart still signals plan review on complet
 	const { result } = await runTool(fake, "clyean_resume", { work_id: "w-plan" }, ctx);
 	expect(resultText(result)).toContain("Change plan: 2026-09-21-x/v2");
 	expect(fake.busEmissions).toEqual([{ channel: "herdr:blocked", data: { active: true, label: "Change plan ready for review" } }]);
+});
+
+function leaseReply(request: any): StubReply {
+	if (request.method === "session.lease") return { result: { type: "lease" }, closeAfterEvents: false };
+	return statusReply();
+}
+
+function shutdownRecorder() {
+	const { ctx, notifications } = createFakeContext();
+	const recorder = { ctx: ctx as any, notifications, shutdowns: 0 };
+	recorder.ctx.shutdown = () => {
+		recorder.shutdowns += 1;
+	};
+	return recorder;
+}
+
+async function installWithLease(socketPath: string) {
+	sandbox.reset({
+		CLYEAN_AGENT: "user-assistant",
+		CLYEAN_ORCHESTRATOR_SOCKET: socketPath,
+		CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS: "500",
+		CLYEAN_ORCHESTRATOR_LEASE: "1",
+	});
+	const fake = createFakePi();
+	const { default: install } = await importFresh(BRIDGE_MODULE);
+	install(fake.pi);
+	return fake;
+}
+
+function leaseRequests(): any[] {
+	return server!.requests.filter(request => request.method === "session.lease");
+}
+
+test("the lease shuts the harness down when the clyean process that started it goes away", async () => {
+	server = await startStubOrchestrator("lease", leaseReply);
+	const fake = await installWithLease(server.socketPath);
+	const recorder = shutdownRecorder();
+	await fake.emit("session_start", {}, recorder.ctx);
+	await waitFor(() => leaseRequests().length === 1, 2000, "the lease request");
+	await sleep(50);
+	expect(recorder.shutdowns).toBe(0);
+	server.dropConnections();
+	await waitFor(() => recorder.shutdowns === 1, 2000, "the shutdown");
+	expect(recorder.notifications.at(-1)?.message).toContain("connection to the clyean process");
+});
+
+test("a lease that cannot reach the orchestrator shuts the harness down when the session starts", async () => {
+	const fake = await installWithLease(shortSocketPath("absent"));
+	await sleep(50);
+	const recorder = shutdownRecorder();
+	await fake.emit("session_start", {}, recorder.ctx);
+	await waitFor(() => recorder.shutdowns === 1, 2000, "the shutdown");
+});
+
+test("no lease is held without CLYEAN_ORCHESTRATOR_LEASE", async () => {
+	const fake = await installBridge(leaseReply);
+	await fake.emit("session_start", {}, shutdownRecorder().ctx);
+	await sleep(50);
+	expect(leaseRequests()).toHaveLength(0);
+});
+
+test("loading the extension again keeps the one lease", async () => {
+	server = await startStubOrchestrator("lease-reload", leaseReply);
+	await installWithLease(server.socketPath);
+	await installWithLease(server.socketPath);
+	await waitFor(() => leaseRequests().length === 1, 2000, "the lease request");
+	await sleep(50);
+	expect(leaseRequests()).toHaveLength(1);
 });

@@ -117,11 +117,12 @@ pub struct AgentContainerSpec {
     pub agent: AgentId,
     pub rootfs: PathBuf,
     pub workdir: String,
+    pub labels: Vec<(String, String)>,
     pub mounts: Vec<MountSpec>,
-    pub tmpfs_masks: Vec<String>,
+    /// Paths that get a private, empty in-memory filesystem in this container.
+    pub tmpfs_mounts: Vec<String>,
     pub environment: Vec<(String, String)>,
     pub tty: bool,
-    pub detached: bool,
     pub remove_on_exit: bool,
     pub extra_run_args: Vec<String>,
     pub command: Vec<String>,
@@ -130,22 +131,26 @@ pub struct AgentContainerSpec {
 impl AgentContainerSpec {
     /// The complete argument vector after `podman`.  Every option precedes the rootfs
     /// path because Podman stops parsing options at the first positional argument.
+    /// Detaching is always disabled: no one reattaches to an agent container, and the key
+    /// sequence must never be taken out of an agent's input.
     pub fn run_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "run".into(),
             "--init".into(),
             "--name".into(),
             self.name.clone(),
+            "--interactive".into(),
+            "--detach-keys=".into(),
         ];
-        args.push("--interactive".into());
         if self.tty {
             args.push("--tty".into());
         }
-        if self.detached {
-            args.push("--detach".into());
-        }
         if self.remove_on_exit {
             args.push("--rm".into());
+        }
+        for (key, value) in &self.labels {
+            args.push("--label".into());
+            args.push(format!("{key}={value}"));
         }
         args.push("--workdir".into());
         args.push(self.workdir.clone());
@@ -153,9 +158,11 @@ impl AgentContainerSpec {
             args.push("--mount".into());
             args.push(mount.podman_argument());
         }
-        for mask in &self.tmpfs_masks {
+        // Without notmpcopyup, Podman copies whatever the root filesystem holds at the path
+        // into memory: for the mask over the in-project root filesystem, all of it.
+        for path in &self.tmpfs_mounts {
             args.push("--mount".into());
-            args.push(format!("type=tmpfs,dst={mask}"));
+            args.push(format!("type=tmpfs,dst={path},notmpcopyup"));
         }
         for (key, value) in &self.environment {
             args.push("--env".into());
@@ -165,15 +172,6 @@ impl AgentContainerSpec {
         args.push("--rootfs".into());
         args.push(self.rootfs.to_string_lossy().into_owned());
         args.extend(self.command.iter().cloned());
-        args
-    }
-
-    /// Arguments for `podman create` with the same shape (used for interactive
-    /// containers that are started with `podman start --attach`).
-    pub fn create_args(&self) -> Vec<String> {
-        let mut args = self.run_args();
-        args[0] = "create".into();
-        args.retain(|arg| arg != "--detach");
         args
     }
 }
@@ -223,14 +221,14 @@ mod tests {
             agent: AgentId::Programmer,
             rootfs: PathBuf::from("/p/.clyean/container-root"),
             workdir: "/home/skyei/workspace/p".into(),
+            labels: vec![("clyean.role".into(), "user-assistant".into())],
             mounts: vec![
                 MountSpec::read_write("/host/p", "/home/skyei/workspace/p"),
                 MountSpec::read_only("/host/data", "/mnt/data"),
             ],
-            tmpfs_masks: vec!["/home/skyei/workspace/p/.clyean/container-root".into()],
+            tmpfs_mounts: vec!["/home/skyei/workspace/p/.clyean/container-root".into()],
             environment: vec![("CLYEAN_AGENT".into(), "programmer".into())],
             tty: false,
-            detached: false,
             remove_on_exit: true,
             extra_run_args: vec!["--memory".into(), "4g".into()],
             command: vec!["clyean".into(), "--mode".into(), "rpc".into()],
@@ -239,19 +237,23 @@ mod tests {
         let rootfs_index = args.iter().position(|a| a == "--rootfs").unwrap();
         assert_eq!(args[rootfs_index + 1], "/p/.clyean/container-root");
         assert_eq!(&args[rootfs_index + 2..], ["clyean", "--mode", "rpc"]);
-        assert!(args[..rootfs_index].contains(&"--init".to_string()));
-        assert!(args[..rootfs_index].contains(&"--rm".to_string()));
-        assert!(args[..rootfs_index]
-            .contains(&"type=bind,src=/host/data,dst=/mnt/data,ro=true".to_string()));
-        assert!(args[..rootfs_index]
-            .contains(&"type=bind,src=/host/p,dst=/home/skyei/workspace/p".to_string()));
-        assert!(args[..rootfs_index].contains(
-            &"type=tmpfs,dst=/home/skyei/workspace/p/.clyean/container-root".to_string()
-        ));
-        assert!(args[..rootfs_index].contains(&"CLYEAN_AGENT=programmer".to_string()));
-        assert!(args[..rootfs_index].contains(&"--memory".to_string()));
+        let options = &args[..rootfs_index];
+        for expected in [
+            "--init",
+            "--rm",
+            "--detach-keys=",
+            "clyean.role=user-assistant",
+            "type=bind,src=/host/data,dst=/mnt/data,ro=true",
+            "type=bind,src=/host/p,dst=/home/skyei/workspace/p",
+            "type=tmpfs,dst=/home/skyei/workspace/p/.clyean/container-root,notmpcopyup",
+            "CLYEAN_AGENT=programmer",
+            "--memory",
+        ] {
+            assert!(
+                options.contains(&expected.to_string()),
+                "missing {expected}"
+            );
+        }
         assert!(!args.contains(&"--tty".to_string()));
-        let create = spec.create_args();
-        assert_eq!(create[0], "create");
     }
 }

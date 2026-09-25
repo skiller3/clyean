@@ -3,11 +3,12 @@
 
 //! Podman-based sandboxing of Clyean agents: the shared root filesystem under
 //! `.clyean/container-root`, its provisioning, the mounts and environment of every agent
-//! container, and the Herdr socket pass-through for the User Assistant.
+//! container, and the User Assistant containers that outlive their `clyean` process.
 
 pub mod container;
 pub mod herdr;
 pub mod launch;
+pub mod orphans;
 pub mod podman;
 pub mod provisioning;
 pub mod rootfs;
@@ -41,8 +42,8 @@ pub enum SandboxError {
     },
     #[error("the sandbox root filesystem is not provisioned: {0}")]
     NotProvisioned(String),
-    #[error("harness binary not found: {0}")]
-    HarnessMissing(String),
+    #[error("a sandbox executable is missing: {0}")]
+    ExecutableMissing(String),
     #[error("{0}")]
     Invalid(String),
 }

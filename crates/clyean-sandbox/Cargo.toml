@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 clyean-project = { workspace = true }
 clyean-agents = { workspace = true }
+clyean-bridge = { workspace = true }
 clyean-plantuml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -23,4 +24,5 @@ reqwest = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+clyean-bridge = { workspace = true, features = ["host"] }
 tempfile = { workspace = true }

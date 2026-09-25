@@ -35,8 +35,8 @@ Clyean then:
 1. Initializes a Git repository when the directory is not already inside one.
 2. Writes `.clyean/agents/` (baseline instructions and per-agent settings), and `.clyean/.gitignore` with the rules Git does not already honor.
 3. Populates `.clyean/container-root` from `ubuntu:latest` and provisions it: a Java runtime, the pinned PlantUML jar, and the contained harness.  This takes a few minutes the first time and downloads a few hundred megabytes; later launches skip it.
-4. Projects each agent's profile into the sandbox and starts the host orchestrator on a Unix socket.
-5. Creates the User Assistant container and attaches your terminal to it.  You are now talking to the User Assistant inside the sandbox; the welcome box reads `clyean v<harness version>` and credits the Oh-My-Pi harness.
+4. Projects each agent's profile into the sandbox and starts the orchestrator inside the `clyean` process.
+5. Starts this invocation's own User Assistant container, connects your terminal to it, and opens the bridge that links the container to the orchestrator.  You are now talking to the User Assistant inside the sandbox; the welcome box reads `clyean v<harness version>` and credits the Oh-My-Pi harness.
 
 The harness needs a model provider.  Either export the provider's variable (for example `ANTHROPIC_API_KEY`) before running `clyean`, which passes it into every agent container, or use `/login` in the User Assistant; by default the other agents inherit the User Assistant's credentials when they start.  [Configure agents](../how-to/configure-agents.md) has the details.
 
@@ -64,4 +64,6 @@ The implementation workflow updates `.clyean/SPECS.md`, updates and renders the 
 
 ## 5. Leave and come back
 
-Quit the User Assistant with `/exit` (or Ctrl-D); the container stops and is removed.  Detach instead with Ctrl-p Ctrl-q and the User Assistant keeps running; the next `clyean` in the same project re-attaches to it.  `clyean --continue` resumes the previous session, `clyean --resume` opens the session picker, and `clyean work` lists units of orchestrated work, including any that were interrupted and can be resumed.
+Quit the User Assistant with `/exit` (or Ctrl-D); its container stops and is removed.  The User Assistant also ends when you close the terminal or the `clyean` process stops for any other reason, because every invocation owns its container.  Your sessions live in the sandbox, so nothing is lost: `clyean --continue` resumes the most recent session, `clyean --resume` opens the session picker, and `clyean work` lists units of orchestrated work, including any that were interrupted and can be resumed.
+
+You can also run `clyean` in a second terminal of the same project while the first is open.  Each invocation gets its own User Assistant and session; if both delegate work at once, the second is told the project is busy unless the project uses Git worktrees.

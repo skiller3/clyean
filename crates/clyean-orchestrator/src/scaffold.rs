@@ -15,7 +15,7 @@ use clyean_project::config::DEFAULT_SANDBOX_IMAGE;
 use clyean_project::ignore::ensure_ignore_rules;
 use clyean_project::{ProjectConfig, ProjectDirectory, ProjectLayout, ProjectType, SandboxConfig};
 use clyean_sandbox::provisioning::{
-    ensure_plantuml_jar, provision, resolve_harness_binary, ProvisioningInputs,
+    ensure_plantuml_jar, provision, resolve_sandbox_executable, ProvisioningInputs, HARNESS,
     PROVISIONING_VERSION,
 };
 use clyean_sandbox::rootfs::{is_populated, populate_from_image, RootfsMarker};
@@ -131,7 +131,8 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
             .map_err(|e| OrchestratorError::Workflow(format!("populate task failed: {e}")))??
     };
     let jar = ensure_plantuml_jar(inputs.cache_dir).await?;
-    let harness = resolve_harness_binary(
+    let harness = resolve_sandbox_executable(
+        &HARNESS,
         inputs.sandbox.harness_binary.as_deref(),
         inputs.clyean_version,
         arch_tag,

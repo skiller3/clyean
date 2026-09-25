@@ -187,6 +187,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clyean-agents",
+ "clyean-bridge",
  "clyean-git",
  "clyean-harness",
  "clyean-orchestrator",
@@ -211,6 +212,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "clyean-bridge"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -278,6 +287,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "uuid",
 ]
 
 [[package]]
@@ -285,6 +295,7 @@ name = "clyean-sandbox"
 version = "0.1.0"
 dependencies = [
  "clyean-agents",
+ "clyean-bridge",
  "clyean-plantuml",
  "clyean-project",
  "hex",

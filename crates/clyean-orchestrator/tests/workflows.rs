@@ -107,6 +107,35 @@ fn write_plan_sections(layout: &ProjectLayout, plan: &str, overview: &str, spec:
 }
 
 #[tokio::test]
+async fn a_lease_stays_open_until_the_user_assistant_closes_it() {
+    let fixture = scaffolded_fixture().await;
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server);
+    let service = fixture.service.clone();
+    let task =
+        tokio::spawn(async move { handle_connection(service, server_read, server_write).await });
+    let (client_read, mut client_write) = tokio::io::split(client);
+    client_write
+        .write_all(b"{\"id\":\"lease-1\",\"method\":\"session.lease\",\"params\":{}}\n")
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(client_read).lines();
+    let response: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        response,
+        json!({"id": "lease-1", "result": {"type": "lease"}})
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !task.is_finished(),
+        "the lease ended while its holder was alive"
+    );
+    client_write.shutdown().await.unwrap();
+    task.await.unwrap().unwrap();
+    assert_eq!(lines.next_line().await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn planning_asks_the_user_then_authors_and_reviews_every_section() {
     let fixture = scaffolded_fixture().await;
     let layout = fixture.layout.clone();

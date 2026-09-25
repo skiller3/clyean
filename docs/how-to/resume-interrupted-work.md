@@ -1,6 +1,6 @@
 # Resume interrupted work
 
-Every unit of orchestrated work (scaffolding, research, planning, implementation) is journaled after each step, so a workflow interrupted by a crash, a closed terminal, or a cancelled turn can be finished rather than restarted.
+Every unit of orchestrated work (scaffolding, research, planning, implementation) is journaled after each step, so a workflow interrupted by a crash, a closed terminal, or a cancelled turn can be finished rather than restarted.  The orchestrator runs inside the `clyean` process that started your User Assistant, so work stops when that process ends; resume it from any later invocation.
 
 ## Find unfinished work
 
@@ -24,7 +24,7 @@ Resume work 01a0c4eadbf876f1bddb45215067c861.
 
 The User Assistant calls `clyean_resume`.  Clyean reloads the journal, re-opens the sub-agent sessions recorded in it (they are resumed from their session files, so the agents keep their context), and continues from the recorded phase.  A work that was waiting for information replays its questions first; answer them and the User Assistant calls `clyean_provide_information`.
 
-Only one unit of work runs per project at a time unless the project uses Git worktrees; a second one fails with `project_locked` until the first finishes.
+Only one unit of work runs per project at a time unless the project uses Git worktrees; a second one fails with `project_locked` until the first finishes, including one started by another `clyean` invocation of the same project.  A work journaled by one invocation can be resumed by another once the first has released the lock.
 
 ## Cancel
 

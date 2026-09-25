@@ -43,7 +43,7 @@ Keys are camelCase.
 | `git.useWorktrees` | boolean | the answer to the worktree question | When true, project locking is a no-op. |
 | `sandbox.image` | string | `docker.io/library/ubuntu:latest` | Image the root filesystem is populated from.  Changing it makes the sandbox outdated. |
 | `sandbox.mounts` | array of strings | `[]` | Host paths mounted read-only at `/mnt/<base name>`. |
-| `sandbox.podmanRunArgs` | array of strings | `[]` | Extra arguments appended to every `podman run` and `podman create`. |
+| `sandbox.podmanRunArgs` | array of strings | `[]` | Extra arguments appended to every `podman run`. |
 | `sandbox.harnessBinary` | string, optional | absent | Host path of the harness binary to install into the sandbox instead of the release download. |
 | `sandbox.passthroughEnv` | array of strings | `[]` | Extra host environment variable names, or `*` glob patterns, passed into every agent container in addition to the built-in credential patterns. |
 | `sandbox.inheritCredentials` | boolean | `true` | Copy the User Assistant's credential store into each sub-agent's profile when the sub-agent starts. |

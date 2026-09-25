@@ -8,15 +8,17 @@ Nothing changes on the command line: run `clyean` in a Herdr pane as you would a
 
 You do not run `herdr integration install`; that command has no Clyean integration and Clyean does not need one.  Do not install Herdr's `omp` integration into a Clyean project either: only one reporter may claim a pane, and Clyean's reporter identifies itself as source `custom:clyean` with the agent label `clyean`.
 
-## What Clyean mounts and propagates
+## What Clyean relays, mounts, and propagates
 
 For the User Assistant container only, Clyean:
 
-- Bind-mounts the host socket named by `HERDR_SOCKET_PATH` read-write at `/run/herdr/herdr.sock` and sets `HERDR_SOCKET_PATH` to that path inside the container.  Named Herdr sessions keep their socket under `~/.config/herdr/sessions/<name>/`, which is why the path is resolved from the variable rather than assumed.
+- Relays the host socket named by `HERDR_SOCKET_PATH` into the container through the bridge, at `/run/herdr/herdr.sock`, and sets `HERDR_SOCKET_PATH` to that path inside the container.  The relay passes every request and response through unmodified.  Named Herdr sessions keep their socket under `~/.config/herdr/sessions/<name>/`, which is why the path is resolved from the variable rather than assumed.
 - Propagates `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID`.
 - Bind-mounts the `herdr` executable read-only at `/usr/local/bin/herdr` and sets `HERDR_BIN_PATH` when the executable is found through `HERDR_BIN_PATH` or on `PATH`.  Its absence is not an error.
 
 Every other agent container gets none of this, and the reporter extension is installed only in the User Assistant's profile.
+
+Every `clyean` invocation reports for the pane it runs in.  Two invocations of one project in two panes show two independent states, one per User Assistant.
 
 ## The sandboxing exception
 
@@ -48,6 +50,6 @@ Values are milliseconds; invalid or negative values fall back to the defaults.
 
 ## Troubleshooting
 
-- Nothing in the sidebar: confirm the three variables are set in the pane (`env | grep HERDR`), then confirm the socket is mounted (`clyean sandbox shell`, then `ls -la /run/herdr`).  Clyean requires `HERDR_ENV=1`; a launcher that strips it also strips reporting.
+- Nothing in the sidebar: confirm the three variables are set in the pane (`env | grep HERDR`), then run `clyean -v` and look for the `bridge open` line.  Inside the User Assistant, the Herdr CLI (`herdr`) reaches Herdr through the relayed socket.  Clyean requires `HERDR_ENV=1`; a launcher that strips it also strips reporting.
 - The pane is claimed by `omp`: a Herdr `omp` integration file exists under the User Assistant's profile.  Clyean never ships it; remove `~/.omp/profiles/user-assistant/agent/extensions/herdr-omp-agent-state.ts` from `.clyean/container-root/home/<user>/`.
 - Herdr ships first-class Clyean support later: the reporter stays silent when `HERDR_CLYEAN_INTEGRATION=1` is set or when `herdr-clyean-agent-state.ts` exists in the profile's extensions directory, so the two never report twice for one pane.

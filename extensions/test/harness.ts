@@ -209,6 +209,8 @@ export interface StubReply {
 export interface StubOrchestrator {
 	socketPath: string;
 	requests: any[];
+	/** Ends every open connection, as the bridge does when its clyean process dies. */
+	dropConnections(): void;
 	close(): Promise<void>;
 }
 
@@ -219,7 +221,10 @@ export async function startStubOrchestrator(
 ): Promise<StubOrchestrator> {
 	const socketPath = shortSocketPath(name);
 	const requests: any[] = [];
+	const sockets = new Set<Socket>();
 	const server = createServer((socket: Socket) => {
+		sockets.add(socket);
+		socket.on("close", () => sockets.delete(socket));
 		let input = "";
 		let handled = false;
 		socket.setEncoding("utf8");
@@ -247,7 +252,17 @@ export async function startStubOrchestrator(
 		});
 	});
 	await listen(server, socketPath);
-	return { socketPath, requests, close: () => closeServer(server, socketPath) };
+	return {
+		socketPath,
+		requests,
+		dropConnections() {
+			for (const socket of sockets) socket.destroy();
+		},
+		close() {
+			for (const socket of sockets) socket.destroy();
+			return closeServer(server, socketPath);
+		},
+	};
 }
 
 const ENVIRONMENT_KEYS = [
@@ -271,6 +286,7 @@ const ENVIRONMENT_KEYS = [
 	"CLYEAN_ORCHESTRATOR_SOCKET",
 	"CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS",
 	"CLYEAN_ORCHESTRATOR_SILENCE_TIMEOUT_MS",
+	"CLYEAN_ORCHESTRATOR_LEASE",
 ] as const;
 
 /** Snapshot the environment keys the extensions read so each test can start clean and restore afterwards. */

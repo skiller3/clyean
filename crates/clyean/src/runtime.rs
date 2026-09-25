@@ -19,6 +19,7 @@ use clyean_plantuml::render::render_directory;
 use clyean_plantuml::RenderReport;
 use clyean_project::{ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig};
 use clyean_sandbox::launch::cache_dir;
+use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{ContainerUser, HerdrHostContext, LaunchContext, LaunchRole, Podman};
 
@@ -124,11 +125,7 @@ impl ProjectRuntime {
             .context("preparing the sandbox root filesystem")
     }
 
-    pub fn launch_context(
-        &self,
-        config: ProjectConfig,
-        orchestrator_socket: Option<PathBuf>,
-    ) -> LaunchContext {
+    pub fn launch_context(&self, config: ProjectConfig) -> LaunchContext {
         LaunchContext {
             podman: self.podman.clone(),
             directory: self.directory.clone(),
@@ -138,8 +135,27 @@ impl ProjectRuntime {
             user: self.user.clone(),
             clyean_version: VERSION.to_string(),
             herdr: self.herdr.clone(),
-            orchestrator_socket,
         }
+    }
+
+    /// The host copy of the bridge for the architecture of the kernel that runs the
+    /// containers, which the User Assistant's container mounts read-only.
+    pub async fn resolve_bridge_binary(&self) -> Result<PathBuf> {
+        let host = self
+            .podman
+            .host_info()
+            .context("asking Podman for the architecture of its containers")?;
+        let bridge = resolve_sandbox_executable(
+            &BRIDGE,
+            None,
+            VERSION,
+            host.harness_arch_tag()?,
+            &self.cache_dir,
+        )
+        .await
+        .context("finding the bridge executable")?;
+        tracing::info!(target: "clyean::launch", bridge = %bridge.path.display(), origin = ?bridge.origin, "bridge executable");
+        Ok(bridge.path)
     }
 
     /// A configuration usable before the project is scaffolded, for maintenance containers.

@@ -1,11 +1,12 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
-// CLYEAN_EXTENSION_VERSION=1
+// CLYEAN_EXTENSION_VERSION=2
 // managed by clyean; upgrading clyean overwrites this file.
 // add user customizations in sibling files instead of editing this one.
 //
-// Bridge between the Clyean User Assistant and the host orchestrator.  The
-// protocol is documented in docs/reference/orchestrator-protocol.md.
+// Connects the Clyean User Assistant to the host orchestrator, which the bridge of
+// the clyean process that started this container serves at the orchestrator
+// socket.  The protocol is documented in docs/reference/orchestrator-protocol.md.
 
 import net from "node:net";
 
@@ -41,6 +42,7 @@ export interface StreamOutcome {
 }
 
 export const DEFAULT_ORCHESTRATOR_SOCKET_PATH = "/run/clyean/orchestrator.sock";
+export const LEASE_METHOD = "session.lease";
 export const PROMPT_TYPES = [
 	"SOFTWARE_ENGINEERING_PROJECT_RESEARCH",
 	"SOFTWARE_ENGINEERING_PROJECT_PLANNING",
@@ -82,7 +84,7 @@ function unreachableError(socketPath: string, cause: unknown): OrchestratorError
 	const code = (cause as { code?: string })?.code || "connection failed";
 	return new OrchestratorError(
 		"unreachable",
-		`The Clyean host orchestrator is not reachable at ${socketPath} (${code}). Start clyean on the host so the orchestrator socket is mounted into this container, then retry.`,
+		`The Clyean host orchestrator is not reachable at ${socketPath} (${code}). The bridge of the clyean process that started this container serves it; start clyean again if that process has exited.`,
 	);
 }
 
@@ -264,6 +266,73 @@ export class OrchestratorClient {
 	}
 }
 
+const LEASES = Symbol.for("clyean.orchestrator.leases");
+
+/** The orchestrator lease of this process, shared by every load of this extension. */
+export interface OrchestratorLease {
+	/** Why the lease ended, once it has. */
+	lost?: string;
+	/** Shuts the harness down; set from the latest session context. */
+	shutdown?: () => void;
+}
+
+/**
+ * Holds one connection to the orchestrator for the life of this process.  The clyean
+ * process that started this container serves it through its bridge, so the connection
+ * ends exactly when that process is gone, for whatever reason, and the harness must then
+ * shut down.  The socket does not keep the process alive on its own.
+ */
+export function holdOrchestratorLease(socketPath: string): OrchestratorLease {
+	const holder = globalThis as Record<symbol, Map<string, OrchestratorLease> | undefined>;
+	const leases = (holder[LEASES] ??= new Map());
+	const existing = leases.get(socketPath);
+	if (existing) return existing;
+	const lease: OrchestratorLease = {};
+	leases.set(socketPath, lease);
+	const lose = (reason: string) => {
+		if (lease.lost) return;
+		lease.lost = reason;
+		lease.shutdown?.();
+	};
+	let buffered = "";
+	let answered = false;
+	const socket = net.createConnection(socketPath);
+	socket.unref();
+	socket.setEncoding("utf8");
+	socket.on("connect", () => {
+		socket.write(`${JSON.stringify({ id: `lease:${process.pid}`, method: LEASE_METHOD, params: {} })}\n`);
+	});
+	socket.on("data", (chunk: string) => {
+		if (answered) return;
+		buffered += chunk;
+		const newline = buffered.indexOf("\n");
+		if (newline === -1) return;
+		answered = true;
+		let frame: any;
+		try {
+			frame = JSON.parse(buffered.slice(0, newline));
+		} catch {
+			frame = undefined;
+		}
+		if (!frame || frame.error) {
+			lose(`the orchestrator refused the lease (${frame?.error?.message ?? "the answer was not JSON"})`);
+			socket.destroy();
+		}
+	});
+	socket.on("error", () => {});
+	socket.on("close", () => lose("its connection to the clyean process that started this container ended"));
+	return lease;
+}
+
+function bindLeaseShutdown(lease: OrchestratorLease, ctx: any): void {
+	if (typeof ctx?.shutdown !== "function") return;
+	lease.shutdown = () => {
+		ctx.ui?.notify?.(`Clyean is shutting down: ${lease.lost}.`, "error");
+		ctx.shutdown();
+	};
+	if (lease.lost) lease.shutdown();
+}
+
 class BoundedTranscript {
 	readonly #lines: string[] = [];
 	#dropped = 0;
@@ -395,6 +464,7 @@ export default function clyeanOrchestration(pi: ExtensionApiLike): void {
 		connectTimeoutMs: parseDurationEnv(env, "CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS", DEFAULT_CONNECT_TIMEOUT_MS),
 		silenceTimeoutMs: parseDurationEnv(env, "CLYEAN_ORCHESTRATOR_SILENCE_TIMEOUT_MS", DEFAULT_SILENCE_TIMEOUT_MS),
 	});
+	const lease = env.CLYEAN_ORCHESTRATOR_LEASE === "1" ? holdOrchestratorLease(orchestratorSocketPath(env)) : undefined;
 	const waitSignal = new HerdrWaitSignal(data => pi.events.emit("herdr:blocked", data));
 	const promptTypeByWorkId = new Map<string, string>();
 	const z = pi.zod;
@@ -608,7 +678,12 @@ export default function clyeanOrchestration(pi: ExtensionApiLike): void {
 		return undefined;
 	});
 
+	pi.on("session_switch", (_event, ctx: HandlerContext) => {
+		if (lease) bindLeaseShutdown(lease, ctx);
+	});
+
 	pi.on("session_start", async (_event, ctx: HandlerContext) => {
+		if (lease) bindLeaseShutdown(lease, ctx);
 		let status: any;
 		try {
 			status = await fetchStatus();

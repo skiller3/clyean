@@ -1,0 +1,26 @@
+[package]
+name = "clyean-bridge"
+description = "The bridge between a User Assistant container and the clyean process that started it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The container end is a small static Linux executable (built for the musl targets), so
+# its default build depends on nothing but the standard library.  The `host` feature adds
+# the asynchronous host end that the clyean command line runs.
+[[bin]]
+name = "clyean-bridge"
+path = "src/main.rs"
+
+[features]
+host = ["dep:tokio"]
+
+[dependencies]
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

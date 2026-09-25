@@ -6,9 +6,29 @@ This page is the reference for how Clyean lays out an agent sandbox and what eve
 
 Every agent of a project runs in a Podman container whose root filesystem is the project's `.clyean/container-root` directory, passed to Podman as `--rootfs`.  The directory is populated from the image named in `.clyean/project.json` (`sandbox.image`, default `ubuntu:latest`) and then provisioned.  All agents of a project share this one root filesystem, so a package installed by one agent is visible to the next.
 
-`podman run` is always invoked with `--init`, so PID 1 inside the container is Podman's init process and the agent's harness process is its sole direct child.
+`podman run` is always invoked with `--init`, so PID 1 inside the container is Podman's init process and the agent's harness process is its sole direct child.  Every agent container runs with `--rm` and `--detach-keys=`: it is removed when it exits, and it cannot be detached from.
 
 Provisioning writes a marker file, `/.clyean-sandbox.json`, recording the image reference, the image digest, the provisioning schema version, and the Clyean version that provisioned the root.  `clyean sandbox rebuild` discards and re-creates the whole root.
+
+## User Assistant containers
+
+Every invocation of `clyean` starts exactly one User Assistant, in a container of its own that ends when the invocation ends.  Several invocations of one project may run at once; each has its own container and session on the shared root filesystem.
+
+| Property | Value |
+| --- | --- |
+| Name | `clyean-<project-id>-user-assistant-<launch-id>`, where `<launch-id>` is eight random hexadecimal characters chosen by the invocation. |
+| Labels | `clyean.project=<project-id>`, `clyean.launch=<launch-id>`, `clyean.role=user-assistant` |
+| Command | `/usr/local/libexec/clyean/clyean-bridge await --ready-file /run/clyean/bridge.ready -- /usr/local/bin/clyean <harness arguments>` |
+| Terminal | Allocated for interactive launches, not for print mode. |
+
+The container reaches its `clyean` process only through the bridge: once the container runs, `clyean` opens one `podman exec --interactive` session running `clyean-bridge bridge`, and multiplexes every connection to the bridge's sockets over the session's standard input and output.  The bridge serves two channels:
+
+- `orchestrator`, at `/run/clyean/orchestrator.sock`, carrying the orchestrator protocol and nothing else.
+- `herdr`, at `/run/herdr/herdr.sock`, relaying the host Herdr socket unmodified, only when `clyean` runs inside a Herdr pane.
+
+The container's command is a start gate: it waits until the bridge creates `/run/clyean/bridge.ready`, which it does once both sockets accept connections, and then replaces itself with the harness, so the harness never runs without its bridge and is still the only child of init.  If the bridge is not ready within 30 seconds, the gate exits with status 125 and the container ends before the harness starts.
+
+The User Assistant's orchestration extension holds a lease: one `session.lease` connection to the orchestrator for the life of the harness process.  When the `clyean` process ends for any reason, the session's input closes, the bridge exits, the lease connection ends, and the extension shuts the harness down, after which Podman removes the container.  A harness that has stopped responding cannot act on the lease; `clyean sandbox prune` removes such containers (see [the command-line reference](cli.md)).
 
 ## Fixed paths inside the container
 
@@ -21,11 +41,20 @@ Provisioning writes a marker file, `/.clyean-sandbox.json`, recording the image 
 | `/opt/plantuml/plantuml-mit-<version>.jar` | The pinned MIT-licensed PlantUML distribution. | no by convention |
 | `/opt/plantuml/plantuml.jar` | Symbolic link to the pinned jar. | no by convention |
 | `/mnt/<name>` | One read-only bind mount per entry in `sandbox.mounts` of `project.json`; `<name>` is the base name of the host path. | no (read-only mount) |
-| `/run/clyean/orchestrator.sock` | Unix socket to the host orchestrator (User Assistant container only). | n/a |
-| `/run/herdr/herdr.sock` | Bind mount of the host Herdr socket (User Assistant container only, only inside a Herdr pane). | n/a |
-| `/usr/local/bin/herdr` | Read-only bind mount of the host `herdr` executable when it exists (User Assistant container only, only inside a Herdr pane). | no |
+| `/usr/local/libexec/clyean/clyean-bridge` | Read-only bind mount of the host's static bridge executable (User Assistant containers only). | no (read-only mount) |
+| `/run/clyean/orchestrator.sock` | The orchestrator channel of the bridge (User Assistant containers only). | n/a |
+| `/run/clyean/bridge.ready` | Created by the bridge once its sockets accept connections (User Assistant containers only). | n/a |
+| `/run/herdr/herdr.sock` | The Herdr channel of the bridge (User Assistant containers only, only inside a Herdr pane). | n/a |
+| `/usr/local/bin/herdr` | Read-only bind mount of the host `herdr` executable when it exists (User Assistant containers only, only inside a Herdr pane). | no |
 
 The project directory inside the container is the workspace mount joined with the project's path relative to the host workspace directory.  The path `.clyean/container-root` under the mounted project directory is masked with an empty `tmpfs` so that agents never see or traverse the root filesystem through the workspace mount.
+
+Some directories get a private, empty `tmpfs` in each container, so that no container reaches another's sockets through the shared root filesystem:
+
+| Path | Containers |
+| --- | --- |
+| `/run/clyean`, `/run/herdr` | User Assistant |
+| `/home/<user>/.omp/run` and `/home/<user>/.omp/profiles/<agent-id>/run`, where the harness keeps the sockets of its daemons | User Assistant and sub-agents |
 
 Agent processes run as UID 0 inside the container.  Under rootless Podman that UID is the host user, so every file an agent creates in the workspace is owned by the host user.
 
@@ -41,6 +70,7 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | `CLYEAN_HOST_CONTAINER_ROOT` | Absolute host path of `.clyean/container-root`. | all agents |
 | `CLYEAN_WORK_ID` | Identifier of the unit of work the agent was started for. | sub-agents |
 | `CLYEAN_ORCHESTRATOR_SOCKET` | `/run/clyean/orchestrator.sock` | User Assistant |
+| `CLYEAN_ORCHESTRATOR_LEASE` | `1`: hold the orchestrator lease and shut down when it ends. | User Assistant |
 | `HOME` | `/home/<user>` | all agents |
 | `OMP_PROFILE` | The agent identifier, selecting the agent's harness profile. | all agents |
 | `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` | `Clyean <Agent Display Name>` | all agents |
@@ -82,7 +112,7 @@ Every commit made by Clyean, whether by deterministic logic on the host or by an
 
 Two features deliberately let an agent affect state outside the workspace mount and are documented as such:
 
-1. The Herdr socket mounted into the User Assistant container grants the full Herdr socket API, including workspace, tab, and pane mutation and control of panes that do not belong to the project.
+1. The Herdr channel the bridge relays into the User Assistant container grants the full Herdr socket API, including workspace, tab, and pane mutation and control of panes that do not belong to the project.
 2. Remote repository access by the Software Engineering Director agent, once it is implemented.
 
-No other mount is writable, and no other socket is mounted.
+No other mount is writable, and no host socket is mounted: the bridge's channels are the only connections from a container to its `clyean` process.

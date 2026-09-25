@@ -8,7 +8,7 @@ clyean -p --model opus "What does the count command do?"
 echo "Which tests cover the parser?" | clyean -p
 ```
 
-Print mode still prepares the host scaffold and the sandbox, starts the orchestrator socket, and runs the User Assistant in a fresh container without a pseudo-terminal, so delegated workflows work the same way they do interactively.  What differs:
+Print mode still prepares the host scaffold and the sandbox, starts the orchestrator, and runs the invocation's own User Assistant container, without a pseudo-terminal, through the same bridge as an interactive launch, so delegated workflows work the same way they do interactively.  When standard input is a pipe, the harness reads it until it closes, as `omp -p` does; redirect it from `/dev/null` in scripts that keep it open.  What differs:
 
 - Questions the workflow needs answered cannot be asked interactively.  The tool result tells the User Assistant what was asked; the User Assistant reports it and the work stays resumable (`clyean work`, then resume it in an interactive session).
 - Approval prompts cannot be shown; configure `tools.approvalMode` in `USER_ASSISTANT.omp.json` or `USER_ASSISTANT.omp.local.json` accordingly.

@@ -1,10 +1,10 @@
 # Orchestrator protocol
 
-The User Assistant agent runs inside a Podman container while Clyean's orchestration logic runs on the host.  They talk over a Unix domain socket that the host creates and bind-mounts into the User Assistant container at `/run/clyean/orchestrator.sock`.  This page is the reference for that protocol.
+The User Assistant agent runs inside a Podman container while Clyean's orchestration logic runs on the host, inside the `clyean` process that started the container.  They talk over the Unix socket `/run/clyean/orchestrator.sock` inside the container, which the bridge serves: each connection to it travels over the bridge's `podman exec` session to the orchestrator (see [the sandbox contract](sandbox-contract.md)).  This page is the reference for that protocol.
 
 ## Transport
 
-Newline-delimited JSON.  The client (the `clyean-orchestration` harness extension) opens one connection per request, writes exactly one request object followed by `\n`, and then reads response and event objects, one per line, until the connection is closed by the server or a terminal event arrives.  The server never reads more than one request per connection.
+Newline-delimited JSON.  The client (the `clyean-orchestration` harness extension) opens one connection per request, writes exactly one request object followed by `\n`, and then reads response and event objects, one per line, until the connection is closed by the server or a terminal event arrives.  The server never handles more than one request per connection.
 
 Every request carries a client-chosen `id` string and a `method`.  Every response echoes the `id`.
 
@@ -22,6 +22,15 @@ Errors replace `result` with `error`:
 Error codes are `invalid_request`, `unknown_method`, `project_locked`, `not_scaffolded`, `work_not_found`, `request_not_found`, `work_failed`, and `internal`.
 
 ## Methods
+
+### `session.lease`
+
+Held once by the User Assistant for the life of its harness process.  The server answers `{"type":"lease"}` and then keeps the connection open, ignoring anything the client writes, until the client closes it.  The connection ends from the host side only when the bridge does, which happens exactly when the `clyean` process that started the container is gone, so the client shuts the harness down when it ends.
+
+```json
+{"id":"lease:42","method":"session.lease","params":{}}
+{"id":"lease:42","result":{"type":"lease"}}
+```
 
 ### `ping`
 
