@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use clyean_orchestrator::protocol::{Request, StreamedEvent};
-use clyean_orchestrator::scaffold::{prepare_host_files, project_agent_profiles, PendingScaffold};
+use clyean_orchestrator::scaffold::{prepare_host_files, refresh_sandbox_files, PendingScaffold};
 use clyean_orchestrator::service::{OrchestratorService, ProjectState, UnscaffoldedProject};
 use clyean_project::ProjectType;
 use serde_json::json;
@@ -37,11 +37,17 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
         );
     }
     let sandbox = runtime.sandbox_config(&pending)?;
-    let (_, provisioned) = runtime.ensure_sandbox(&sandbox).await?;
+    let podman_sandbox = runtime.podman_sandbox()?;
+    let (marker, provisioned) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
     if provisioned {
         println!("Provisioned the sandbox root filesystem.");
     }
-    project_agent_profiles(&runtime.layout, &runtime.user)?;
+    refresh_sandbox_files(
+        &runtime.layout,
+        &runtime.user,
+        podman_sandbox.location.fs(&runtime.podman).as_ref(),
+        marker,
+    )?;
 
     let Some(project_type) = args.project_type else {
         if runtime.is_scaffolded() {
@@ -58,7 +64,7 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
         ProjectTypeArg::SoftwareEngineering => ProjectType::SoftwareEngineeringProject,
         ProjectTypeArg::Miscellaneous => ProjectType::MiscellaneousProject,
     };
-    let context = runtime.launch_context(runtime.provisional_config(&pending));
+    let context = runtime.launch_context(runtime.provisional_config(&pending), &podman_sandbox);
     let service = Arc::new(OrchestratorService::new(
         ProjectState::Unscaffolded(Box::new(UnscaffoldedProject {
             directory: runtime.directory.clone(),

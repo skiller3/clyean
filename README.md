@@ -2,11 +2,11 @@
 
 Zero-slop agentic coding harness.
 
-Clyean is an orchestration layer for software development by AI agents.  It contains a fork of the [Oh-My-Pi](https://omp.sh/) harness and coordinates several instances of it, one per specialized agent (a User Assistant you talk to, a Scaffolder, a Software Engineering Director, a Specifier, a Software Architect, and a Programmer), so that every change to a project starts from its written specification and architecture and ends in reviewed, committed code.  Every agent runs in a Podman container whose root filesystem belongs to the project, and every step of every workflow is journaled and committed, so work survives interruption and history says which agent did what.
+Clyean is an orchestration layer for software development by AI agents.  It contains a fork of the [Oh-My-Pi](https://omp.sh/) harness and coordinates several instances of it, one per specialized agent (a User Assistant you talk to, a Scaffolder, a Software Engineering Director, a Specifier, a Software Architect, and a Programmer), so that every change to a project starts from its written specification and architecture and ends in reviewed, committed code.  Every agent runs in a Podman container on a root filesystem that belongs to the project, and every step of every workflow is journaled and committed, so work survives interruption and history says which agent did what.
 
 ## Install
 
-Clyean needs Git and Podman on the host; the installers add them when they are missing.
+Clyean needs Git and Podman on the host: Podman 4.9 or later on Linux (including a Linux distribution under WSL), and 5.0 or later on macOS and Windows, where it runs containers in a Podman machine.  The installers add Git and Podman when they are missing and create a Podman machine when none exists.
 
 ```sh
 # Linux and macOS
@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/skiller3/clyean/main/install.sh | s
 irm https://raw.githubusercontent.com/skiller3/clyean/main/install.ps1 | iex
 ```
 
-The scripts accept `--ref <tag>` (`-Ref <tag>`) for a specific release, `--source` (`-Source`) to build with cargo, and `--no-deps` (`-NoDeps`) to skip dependency installation.  This version populates the sandbox on Linux hosts only; see [Limitations](docs/explanation/limitations.md).
+The scripts accept `--ref <tag>` (`-Ref <tag>`) for a specific release, `--source` (`-Source`) to build with cargo, `--no-deps` (`-NoDeps`) to skip dependency installation, and `--dry-run` (`-DryRun`) to print what they would do.  On macOS and Windows, see [Set up macOS](docs/how-to/set-up-macos.md) and [Set up Windows](docs/how-to/set-up-windows.md).
 
 ## Quick start
 

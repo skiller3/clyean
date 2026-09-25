@@ -7,25 +7,34 @@
 #   & ([scriptblock]::Create((irm https://clyean.com/install.ps1))) -Binary -Ref v0.2.0
 #   & ([scriptblock]::Create((irm https://clyean.com/install.ps1))) -Source -Ref v0.2.0
 #   & ([scriptblock]::Create((irm https://clyean.com/install.ps1))) -NoDeps
+#   & ([scriptblock]::Create((irm https://clyean.com/install.ps1))) -DryRun
 #
 # Parameters:
 #   -Binary    Install the prebuilt clyean.exe from GitHub releases (default)
 #   -Source    Build and install clyean from source with cargo (requires a Rust toolchain)
 #   -Ref       Install a specific release tag, for example v0.2.0 (default: latest release)
 #   -NoDeps    Do not install missing host dependencies (git, podman); print instructions instead
+#   -DryRun    Print the commands the installer would run, including the Podman machine's size, and change nothing
 #
 # Environment:
 #   CLYEAN_INSTALL_DIR   Directory that receives clyean.exe (default: %LOCALAPPDATA%\clyean)
+#   CLYEAN_INSTALL_HOST_CPUS, CLYEAN_INSTALL_HOST_MEMORY_MIB
+#                        Stand in for the host's logical processors and memory when sizing a Podman machine (for testing)
+#   CONTAINERS_MACHINE_PROVIDER
+#                        Podman's machine provider; "hyperv" selects Hyper-V instead of the default WSL
 #
-# Clyean runs every agent inside a Podman container, so Podman is a required
-# host dependency alongside git. Dependencies are installed with winget, and
-# every command that changes the host is printed before it runs.
+# Clyean runs every agent inside a Podman container, so Podman 5.0 or later
+# is a required host dependency alongside git. Dependencies are installed with
+# winget, and every command that changes the host is printed before it runs.
+# The installer creates a Podman machine only when none exists and never
+# changes an existing one.
 
 param(
     [switch]$Source,
     [switch]$Binary,
     [string]$Ref,
-    [switch]$NoDeps
+    [switch]$NoDeps,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +93,17 @@ function Test-CommandInstalled {
     }
 }
 
+# Prints a command that changes the host, then runs it unless this is a dry run.
+function Invoke-Logged {
+    param([Parameter(Mandatory = $true)][string]$Display, [Parameter(Mandatory = $true)][scriptblock]$Command)
+    Write-Host "+ $Display"
+    if ($DryRun) {
+        $global:LASTEXITCODE = 0
+        return
+    }
+    Invoke-Native $Command
+}
+
 function Update-SessionPath {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine")
 }
@@ -116,33 +136,97 @@ function Write-DependencyInstructions {
 
 function Install-WingetPackage {
     param([string]$Id)
-    $command = "winget install --id $Id -e --source winget --accept-package-agreements --accept-source-agreements"
-    Write-Host "+ $command"
-    Invoke-Native { winget install --id $Id -e --source winget --accept-package-agreements --accept-source-agreements }
+    Invoke-Logged "winget install --id $Id -e --source winget --accept-package-agreements --accept-source-agreements" {
+        winget install --id $Id -e --source winget --accept-package-agreements --accept-source-agreements
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "winget failed to install $Id (exit code $LASTEXITCODE)"
     }
     Update-SessionPath
 }
 
-# Podman on Windows runs containers inside a WSL 2 based Linux virtual machine
-# that must be created once and started before Clyean can launch agents.
+# Stops with upgrade instructions when the installed Podman is older than 5.0,
+# the oldest release Clyean supports on Windows. Clyean checks again before
+# every launch.
+function Test-PodmanVersion {
+    if (-not (Test-CommandInstalled "podman")) {
+        Write-Host "Podman is not installed yet; it must be 5.0 or later."
+        return
+    }
+    $text = (Invoke-Native { podman --version 2>$null }) | Out-String
+    $match = [regex]::Match($text, "(\d+)\.(\d+)")
+    if ($match.Success -and [int]$match.Groups[1].Value -ge 5) {
+        return
+    }
+    Write-Host "Clyean needs Podman 5.0 or later, but '$($text.Trim())' is installed." -ForegroundColor Red
+    Write-Host "Upgrade it with:  winget upgrade RedHat.Podman" -ForegroundColor Cyan
+    throw "Podman is older than 5.0"
+}
+
+function Get-HostProcessors {
+    if ($env:CLYEAN_INSTALL_HOST_CPUS) { return [int]$env:CLYEAN_INSTALL_HOST_CPUS }
+    return [Environment]::ProcessorCount
+}
+
+function Get-HostMemoryMib {
+    if ($env:CLYEAN_INSTALL_HOST_MEMORY_MIB) { return [int64]$env:CLYEAN_INSTALL_HOST_MEMORY_MIB }
+    return [int64]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
+}
+
+# The size WSL gives its virtual machine, which hosts every WSL distribution
+# including Podman's: its global `processors` and `memory` settings, which
+# default to every logical processor and half of the host's memory.
+function Get-WslMachineSize {
+    param([bool]$Created)
+    if ($Created -and -not $DryRun) {
+        $reported = (Invoke-Native { podman info --format "{{.Host.CPUs}} {{.Host.MemTotal}}" 2>$null }) | Out-String
+        $fields = $reported.Trim() -split "\s+"
+        if ($fields.Count -eq 2) {
+            return @{ Cpus = [int]$fields[0]; MemoryMib = [int64]([int64]$fields[1] / 1MB) }
+        }
+    }
+    return @{ Cpus = (Get-HostProcessors); MemoryMib = [int64]((Get-HostMemoryMib) / 2) }
+}
+
+# Podman on Windows runs containers inside a Linux virtual machine that must be
+# created once and started before Clyean can launch agents. With the default
+# WSL provider the machine's CPUs and memory are WSL's global settings, which
+# the installer never edits; with Hyper-V the machine is sized like on macOS.
 function Ensure-PodmanMachine {
-    $machines = Invoke-Native { podman machine list --format "{{.Name}}" 2>$null }
+    $machines = $null
+    if (Test-CommandInstalled "podman") {
+        $machines = Invoke-Native { podman machine list --format "{{.Name}}" 2>$null }
+    }
+    $created = $false
     if (-not $machines) {
-        Write-Host "+ podman machine init"
-        Invoke-Native { podman machine init }
+        if ($env:CONTAINERS_MACHINE_PROVIDER -eq "hyperv") {
+            $cpus = [Math]::Min(4, (Get-HostProcessors))
+            $memory = [Math]::Min([int64]8192, [int64]((Get-HostMemoryMib) / 2))
+            Write-Host "[NOTE] Clyean supports the Hyper-V provider on a best-effort basis; the default WSL provider is fully supported." -ForegroundColor Yellow
+            Invoke-Logged "podman machine init --cpus $cpus --memory $memory --disk-size 100" {
+                podman machine init --cpus $cpus --memory $memory --disk-size 100
+            }
+        } else {
+            Invoke-Logged "podman machine init" { podman machine init }
+        }
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[WARN] 'podman machine init' failed. Enable WSL 2 with 'wsl --install', reboot, then run 'podman machine init' and 'podman machine start'." -ForegroundColor Yellow
             return
         }
+        $created = $true
     }
-    $state = Invoke-Native { podman machine inspect --format "{{.State}}" 2>$null }
+    $state = if ($DryRun -and $created) { "" } else { Invoke-Native { podman machine inspect --format "{{.State}}" 2>$null } }
     if ($state -notmatch "running") {
-        Write-Host "+ podman machine start"
-        Invoke-Native { podman machine start }
+        Invoke-Logged "podman machine start" { podman machine start }
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[WARN] Could not start the Podman machine; run 'podman machine start' before using clyean." -ForegroundColor Yellow
+        }
+    }
+    if ($env:CONTAINERS_MACHINE_PROVIDER -ne "hyperv") {
+        $size = Get-WslMachineSize -Created $created
+        Write-Host "The Podman machine has $($size.Cpus) CPUs and $([Math]::Round($size.MemoryMib / 1024, 1)) GiB of memory."
+        if ($size.Cpus -lt 4 -or $size.MemoryMib -lt 8192) {
+            Write-Host "[WARN] Clyean recommends at least 4 CPUs and 8 GiB. WSL sets these for every distribution through 'processors' and 'memory' in the [wsl2] section of $env:UserProfile\.wslconfig; raise them there, then run 'wsl --shutdown' and 'podman machine start'." -ForegroundColor Yellow
         }
     }
 }
@@ -155,7 +239,7 @@ function Ensure-Dependencies {
             Write-DependencyInstructions $missing
             throw "Missing dependencies: $($missing -join ', ')"
         }
-        if (-not (Test-CommandInstalled "winget")) {
+        if (-not (Test-CommandInstalled "winget") -and -not $DryRun) {
             Write-Host "winget is required to install dependencies. Install 'App Installer' from the Microsoft Store." -ForegroundColor Yellow
             Write-DependencyInstructions $missing
             throw "winget not found"
@@ -164,11 +248,12 @@ function Ensure-Dependencies {
         if ($missing -contains "git") { Install-WingetPackage "Git.Git" }
         if ($missing -contains "podman") { Install-WingetPackage "RedHat.Podman" }
         $stillMissing = Get-MissingDependencies
-        if ($stillMissing.Count -gt 0) {
+        if ($stillMissing.Count -gt 0 -and -not $DryRun) {
             Write-DependencyInstructions $stillMissing
             throw "Dependencies still missing after installation: $($stillMissing -join ', '). Restart the terminal and re-run the installer."
         }
     }
+    Test-PodmanVersion
     if (-not $NoDeps) {
         Ensure-PodmanMachine
     }
@@ -304,6 +389,13 @@ if ($Source -and $Binary) {
 }
 
 Ensure-Dependencies
+
+if ($DryRun) {
+    $mode = if ($Source) { "source" } else { "binary" }
+    $version = if ($Ref) { $Ref } else { "(latest release)" }
+    Write-Host "Dry run: would install the $mode build of clyean $version for windows-$NativeArchitecture into $InstallDir."
+    return
+}
 
 if ($Source) {
     Install-ViaCargo

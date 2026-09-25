@@ -1,23 +1,30 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! Podman-based sandboxing of Clyean agents: the shared root filesystem under
-//! `.clyean/container-root`, its provisioning, the mounts and environment of every agent
-//! container, and the User Assistant containers that outlive their `clyean` process.
+//! Podman-based sandboxing of Clyean agents: the Podman environment, each project's
+//! sandbox root filesystem beside Podman's data and its provisioning, the mounts and
+//! environment of every agent container, and the User Assistant containers that outlive
+//! their `clyean` process.
 
 pub mod container;
+pub mod environment;
+pub mod fs;
 pub mod herdr;
 pub mod launch;
 pub mod orphans;
 pub mod podman;
 pub mod provisioning;
 pub mod rootfs;
+pub mod roots;
 pub mod user;
 
 pub use container::{AgentContainerSpec, ContainerPaths, MountSpec};
+pub use environment::{HostOs, HostPathMapper, PodmanEnvironment, Topology};
+pub use fs::{SandboxArchive, SandboxFs};
 pub use herdr::HerdrHostContext;
 pub use launch::{LaunchContext, LaunchRole, SandboxRunner};
-pub use podman::{Podman, PodmanHostInfo};
+pub use podman::Podman;
+pub use roots::{Helpers, SandboxLocation, SandboxRoots};
 pub use user::ContainerUser;
 
 #[derive(Debug, thiserror::Error)]

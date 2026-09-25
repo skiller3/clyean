@@ -14,7 +14,7 @@ For each implemented agent, `<NAME>` being the upper-case identifier (`USER_ASSI
 
 Deep merge means objects merge key by key, other values are replaced, and a JSON `null` removes a key.  The `.local.*` companions are ignored by Git through `.clyean/.gitignore`; use them for machine-specific or private settings.
 
-Clyean re-projects all of this into `.clyean/container-root/home/<user>/.omp/profiles/<agent-id>/agent/` on every launch, so edits take effect the next time the agent starts.
+Clyean re-projects all of this into the agent's profile, `/home/<user>/.omp/profiles/<agent-id>/agent/` in the project's sandbox root filesystem, on every launch, so edits take effect the next time the agent starts.
 
 ## Choose an agent's model
 

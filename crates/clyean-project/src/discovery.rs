@@ -63,8 +63,10 @@ impl ProjectDirectory {
     }
 }
 
+/// Canonicalizes without the verbatim `\\?\` prefix that Windows adds, which would break
+/// prefix comparisons and mount translation.
 fn canonicalize(path: &Path) -> Result<PathBuf> {
-    std::fs::canonicalize(path)
+    dunce::canonicalize(path)
         .map_err(|e| ProjectError::io(format!("resolving {}", path.display()), e))
 }
 

@@ -4,11 +4,19 @@ This page is the reference for how Clyean lays out an agent sandbox and what eve
 
 ## Root filesystem
 
-Every agent of a project runs in a Podman container whose root filesystem is the project's `.clyean/container-root` directory, passed to Podman as `--rootfs`.  The directory is populated from the image named in `.clyean/project.json` (`sandbox.image`, default `ubuntu:latest`) and then provisioned.  All agents of a project share this one root filesystem, so a package installed by one agent is visible to the next.
+Every agent of a project runs in a Podman container whose root filesystem is the project's sandbox root filesystem, passed to Podman as `--rootfs`.  All agents of a project share this one root filesystem, so a package installed by one agent is visible to the next.
 
-`podman run` is always invoked with `--init`, so PID 1 inside the container is Podman's init process and the agent's harness process is its sole direct child.  Every agent container runs with `--rm` and `--detach-keys=`: it is removed when it exits, and it cannot be detached from.
+| Property | Value |
+| --- | --- |
+| Identifier | Sixteen random hexadecimal digits, recorded in the project's local-only `.clyean/sandbox.local.json` (`{"sandboxId": "..."}`) at the first launch. |
+| Location | `clyean/roots/<identifier>` inside the directory that holds Podman's `containers` data directory on the Podman host: `~/.local/share/clyean/roots/<identifier>` for rootless Podman, inside the Podman machine on native Windows and macOS.  With a customized graph root, `clyean/roots` inside the directory that contains it. |
+| Label | Every container running on it carries `clyean.sandbox=<identifier>`. |
+| Population | From the image named in `.clyean/project.json` (`sandbox.image`, default `ubuntu:latest`): `podman export` of a container created from it, streamed into a helper container (a pinned Alpine image) that extracts it.  Helper containers also create, list, and remove root filesystems; Clyean never uses `podman unshare`. |
+| Lifetime | Kept across sessions, Clyean upgrades, and restarts; `podman system prune` and `podman volume prune` do not touch it.  Removed by `clyean sandbox rebuild` (and re-created), by `clyean sandbox prune --remove` when orphaned, or with the Podman machine that holds it. |
 
-Provisioning writes a marker file, `/.clyean-sandbox.json`, recording the image reference, the image digest, the provisioning schema version, and the Clyean version that provisioned the root.  `clyean sandbox rebuild` discards and re-creates the whole root.
+`podman run` is always invoked with `--init`, so PID 1 inside the container is Podman's init process and the agent's harness process is its sole direct child.  Every agent container runs with `--rm`, so it is removed when it exits, and it cannot usefully be detached from: `--detach-keys=` turns detaching off, except through Podman's remote client (on native Windows and macOS), which cannot turn it off and gets the sequence `ctrl-],ctrl-^,ctrl-],ctrl-^` instead.
+
+Provisioning writes a marker file, `/.clyean-sandbox.json`, recording the sandbox identifier, the image reference and digest, the provisioning schema version, the Clyean version and time of provisioning, the harness version, and the host path of the project that used the root last with the time of that use; every launch updates the last two.  A marker whose schema is behind the running `clyean`, or whose image is not the configured one, triggers provisioning again.
 
 ## User Assistant containers
 
@@ -17,7 +25,7 @@ Every invocation of `clyean` starts exactly one User Assistant, in a container o
 | Property | Value |
 | --- | --- |
 | Name | `clyean-<project-id>-user-assistant-<launch-id>`, where `<launch-id>` is eight random hexadecimal characters chosen by the invocation. |
-| Labels | `clyean.project=<project-id>`, `clyean.launch=<launch-id>`, `clyean.role=user-assistant` |
+| Labels | `clyean.sandbox=<sandbox-id>`, `clyean.project=<project-id>`, `clyean.launch=<launch-id>`, `clyean.role=user-assistant` |
 | Command | `/usr/local/libexec/clyean/clyean-bridge await --ready-file /run/clyean/bridge.ready -- /usr/local/bin/clyean <harness arguments>` |
 | Terminal | Allocated for interactive launches, not for print mode. |
 
@@ -46,9 +54,9 @@ The User Assistant's orchestration extension holds a lease: one `session.lease` 
 | `/run/clyean/orchestrator.sock` | The orchestrator channel of the bridge (User Assistant containers only). | n/a |
 | `/run/clyean/bridge.ready` | Created by the bridge once its sockets accept connections (User Assistant containers only). | n/a |
 | `/run/herdr/herdr.sock` | The Herdr channel of the bridge (User Assistant containers only, only inside a Herdr pane). | n/a |
-| `/usr/local/bin/herdr` | Read-only bind mount of the host `herdr` executable when it exists (User Assistant containers only, only inside a Herdr pane). | no |
+| `/usr/local/bin/herdr` | Read-only bind mount of the host `herdr` executable when it exists, or on a Podman machine of the Linux build of the same Herdr release (User Assistant containers only, only inside a Herdr pane). | no |
 
-The project directory inside the container is the workspace mount joined with the project's path relative to the host workspace directory.  The path `.clyean/container-root` under the mounted project directory is masked with an empty `tmpfs` so that agents never see or traverse the root filesystem through the workspace mount.
+The project directory inside the container is the workspace mount joined with the project's path relative to the host workspace directory.  On a Windows Podman machine, host paths are translated to the machine's drive mounts (`C:\Users\me\app` is mounted from `/mnt/c/Users/me/app`), and before the first container of a launch Clyean checks that the machine sees every bind-mount source.
 
 Some directories get a private, empty `tmpfs` in each container, so that no container reaches another's sockets or login store through the shared root filesystem:
 
@@ -72,7 +80,8 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | `CLYEAN_PROJECT_DIR` | Absolute container path of the project directory. | all agents |
 | `CLYEAN_WORKSPACE_DIR` | Absolute container path of the workspace mount. | all agents |
 | `CLYEAN_HOST_WORKSPACE_DIR` | Absolute host path of the workspace directory. | all agents |
-| `CLYEAN_HOST_CONTAINER_ROOT` | Absolute host path of `.clyean/container-root`. | all agents |
+| `CLYEAN_HOST_CONTAINER_ROOT` | Absolute host path of the sandbox root filesystem.  Unset on a Podman machine, whose root filesystem this host cannot open. | all agents on Linux and Linux on WSL |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | Git settings for every Git command in the container: the host's global `core.autocrlf` and `core.eol` when set, and the workspace and project directories as `safe.directory`, so a checkout on a shared filesystem neither looks modified nor is refused as owned by another user. | all agents |
 | `CLYEAN_WORK_ID` | Identifier of the unit of work the agent was started for. | sub-agents |
 | `CLYEAN_CREDENTIALS_BUNDLE` | Path of the agent's credential bundle file (see "Credentials"). | sub-agents |
 | `CLYEAN_ORCHESTRATOR_SOCKET` | `/run/clyean/orchestrator.sock` | User Assistant |
@@ -87,7 +96,7 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 
 Host variables that carry credentials or configuration are selected per agent; see "Credentials".
 
-Translating a container path to its host equivalent, which the Herdr reporter needs for session files, follows two rules: a path under `CLYEAN_WORKSPACE_DIR` maps to the same relative path under `CLYEAN_HOST_WORKSPACE_DIR`; any other path maps to the same path under `CLYEAN_HOST_CONTAINER_ROOT`.  Paths under `/run` and `/mnt` have no host equivalent.
+Translating a container path to its host equivalent, which the Herdr reporter needs for session files, follows two rules: a path under `CLYEAN_WORKSPACE_DIR` maps to the same relative path under `CLYEAN_HOST_WORKSPACE_DIR`; any other path maps to the same path under `CLYEAN_HOST_CONTAINER_ROOT`, when it is set.  Paths under `/run` and `/mnt` have no host equivalent, and without `CLYEAN_HOST_CONTAINER_ROOT` the reporter reports the session id instead of the session file.
 
 ## Credentials
 

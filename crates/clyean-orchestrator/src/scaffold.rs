@@ -1,11 +1,13 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! The deterministic half of scaffolding.  `prepare_host_scaffold` runs before the User
-//! Assistant can start (Git repository, agent files, ignore rules, sandbox root);
-//! `complete_scaffold` runs once the project type is known and writes the remaining
-//! scaffold files; the Scaffolder agent then does the research.
+//! The deterministic half of scaffolding.  `prepare_host_files` runs before the User
+//! Assistant can start (Git repository, agent files, ignore rules), `ensure_sandbox` and
+//! `refresh_sandbox_files` prepare the sandbox root filesystem, and `complete_scaffold`
+//! runs once the project type is known and writes the remaining scaffold files; the
+//! Scaffolder agent then does the research.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use clyean_agents::{managed_extensions, AgentId, ProfileProjection};
@@ -18,8 +20,10 @@ use clyean_sandbox::provisioning::{
     ensure_plantuml_jar, provision, resolve_sandbox_executable, ProvisioningInputs, HARNESS,
     PROVISIONING_VERSION,
 };
-use clyean_sandbox::rootfs::{is_populated, populate_from_image, RootfsMarker};
-use clyean_sandbox::{ContainerUser, Podman};
+use clyean_sandbox::rootfs::RootfsMarker;
+use clyean_sandbox::{
+    ContainerUser, Helpers, Podman, PodmanEnvironment, SandboxArchive, SandboxFs, SandboxLocation,
+};
 
 use crate::{OrchestratorError, Result};
 
@@ -90,6 +94,8 @@ pub fn prepare_host_files(
 /// Inputs of the sandbox part of host scaffolding.
 pub struct SandboxInputs<'a> {
     pub podman: &'a Podman,
+    pub environment: &'a PodmanEnvironment,
+    pub location: &'a SandboxLocation,
     pub layout: &'a ProjectLayout,
     pub user: &'a ContainerUser,
     pub sandbox: &'a SandboxConfig,
@@ -97,38 +103,36 @@ pub struct SandboxInputs<'a> {
     pub cache_dir: &'a Path,
 }
 
-/// Populates and provisions the sandbox root filesystem unless a current one exists.
-/// Returns the marker and whether provisioning ran.
+/// Populates and provisions the project's sandbox root filesystem unless a current one
+/// exists.  Returns the marker and whether provisioning ran.
 pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker, bool)> {
-    let root = inputs.layout.container_root_dir();
-    if let Some(marker) = RootfsMarker::read(&root)? {
+    let fs = inputs.location.fs(inputs.podman);
+    let helpers = Helpers::new(inputs.podman.clone(), inputs.environment.sandbox_roots());
+    let existing = RootfsMarker::read_existing(fs.as_ref(), &helpers, &inputs.location.id)?;
+    if let Some(marker) = &existing {
         if marker.provisioning_version >= PROVISIONING_VERSION
             && marker.image == inputs.sandbox.image
         {
-            return Ok((marker, false));
+            return Ok((marker.clone(), false));
         }
         tracing::info!(target: "clyean::scaffold", "sandbox is outdated; re-provisioning");
     }
-    let host = inputs.podman.host_info()?;
-    if host.os != "linux" {
-        return Err(OrchestratorError::Workflow(format!(
-            "Podman reports a {} host; populating the sandbox root filesystem is supported on Linux hosts only in this version",
-            host.os
-        )));
-    }
-    let arch_tag = host.harness_arch_tag()?;
-    let image_digest = if is_populated(&root) {
-        RootfsMarker::read(&root)?
-            .map(|m| m.image_digest)
-            .unwrap_or_default()
-    } else {
-        tracing::info!(target: "clyean::scaffold", image = %inputs.sandbox.image, "populating the sandbox root filesystem");
-        let podman = inputs.podman.clone();
-        let image = inputs.sandbox.image.clone();
-        let root_for_task = root.clone();
-        tokio::task::spawn_blocking(move || populate_from_image(&podman, &image, &root_for_task))
+    let arch_tag = inputs.environment.arch_tag()?;
+    let id = inputs.location.id.clone();
+    let image = inputs.sandbox.image.clone();
+    let image_digest = match existing {
+        Some(marker) if marker.image == inputs.sandbox.image => marker.image_digest,
+        _ => {
+            tracing::info!(target: "clyean::scaffold", image = %image, root = %inputs.location.root, "populating the sandbox root filesystem");
+            tokio::task::spawn_blocking(move || {
+                if helpers.is_populated(&id)? {
+                    helpers.remove(&id)?;
+                }
+                helpers.populate(&id, &image)
+            })
             .await
             .map_err(|e| OrchestratorError::Workflow(format!("populate task failed: {e}")))??
+        }
     };
     let jar = ensure_plantuml_jar(inputs.cache_dir).await?;
     let harness = resolve_sandbox_executable(
@@ -141,19 +145,23 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
     .await?;
     tracing::info!(target: "clyean::scaffold", harness = %harness.path.display(), origin = ?harness.origin, "provisioning the sandbox");
     let podman = inputs.podman.clone();
+    let location = inputs.location.clone();
     let user = inputs.user.clone();
     let image = inputs.sandbox.image.clone();
     let clyean_version = inputs.clyean_version.to_string();
+    let project_dir = inputs.layout.root().to_path_buf();
     let marker = tokio::task::spawn_blocking(move || {
         provision(&ProvisioningInputs {
             podman: &podman,
-            root: &root,
+            location: &location,
+            fs: fs.as_ref(),
             user: &user,
             image: &image,
             image_digest: &image_digest,
             clyean_version: &clyean_version,
             plantuml_jar: &jar,
             harness_binary: &harness.path,
+            project_dir: &project_dir,
         })
     })
     .await
@@ -161,13 +169,39 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
     Ok((marker, true))
 }
 
-/// Projects every implemented agent's profile into the sandbox root.
-pub fn project_agent_profiles(layout: &ProjectLayout, user: &ContainerUser) -> Result<()> {
-    let root = layout.container_root_dir();
-    for agent in AgentId::implemented() {
-        ProfileProjection::for_agent(layout, agent, managed_extensions(agent))?
-            .write(&root, user.name())?;
+/// Projects every implemented agent's profile into the root filesystem, once the project
+/// has agent files, and records this project's use in the marker, in one write.
+pub fn refresh_sandbox_files(
+    layout: &ProjectLayout,
+    user: &ContainerUser,
+    fs: &dyn SandboxFs,
+    marker: RootfsMarker,
+) -> Result<()> {
+    let projections = if layout.agents_dir().is_dir() {
+        AgentId::implemented()
+            .map(|agent| ProfileProjection::for_agent(layout, agent, managed_extensions(agent)))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let reads: Vec<String> = projections
+        .iter()
+        .flat_map(|projection| projection.reads(user.name()))
+        .collect();
+    let contents = fs.read_files(&reads.iter().map(String::as_str).collect::<Vec<_>>())?;
+    let existing: HashMap<String, Vec<u8>> = reads
+        .into_iter()
+        .zip(contents)
+        .filter_map(|(path, contents)| contents.map(|contents| (path, contents)))
+        .collect();
+    let mut archive = SandboxArchive::new();
+    for projection in &projections {
+        for file in projection.files(user.name(), &existing)? {
+            archive.file(&file.path, file.contents, file.mode);
+        }
     }
+    marker.used_by(layout.root()).add_to(&mut archive);
+    fs.write(archive)?;
     Ok(())
 }
 
@@ -278,13 +312,13 @@ mod tests {
         let (git, report) = prepare_host_files(&directory, &layout).unwrap();
         assert!(report.git_initialized);
         assert_eq!(report.agent_files_created.len(), 6 * 3);
-        assert!(report.ignore_rules_added.contains(&"/container-root/"));
+        assert!(report.ignore_rules_added.contains(&"*.local.json"));
         let (_, second) = prepare_host_files(&directory, &layout).unwrap();
         assert!(!second.git_initialized);
         assert!(second.agent_files_created.is_empty());
         assert!(second.ignore_rules_added.is_empty());
         assert!(git
-            .is_ignored(Path::new(".clyean/container-root/etc/x"))
+            .is_ignored(Path::new(".clyean/sandbox.local.json"))
             .unwrap());
 
         let report = complete_scaffold(

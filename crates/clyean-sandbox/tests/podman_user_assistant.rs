@@ -14,7 +14,6 @@
 #![cfg(unix)]
 
 use std::io;
-use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,10 +21,13 @@ use std::time::Duration;
 use clyean_agents::AgentId;
 use clyean_bridge::host::{serve, ConnectFuture, Connector, LocalStream};
 use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
-use clyean_project::{ProjectType, SandboxConfig};
+use clyean_project::{ProjectType, SandboxConfig, SandboxId};
 use clyean_sandbox::orphans::{has_running_bridge, lists_a_bridge, prune_matching};
-use clyean_sandbox::rootfs::{populate_from_image, remove};
-use clyean_sandbox::{AgentContainerSpec, ContainerUser, LaunchContext, LaunchRole, Podman};
+use clyean_sandbox::rootfs::RootfsMarker;
+use clyean_sandbox::{
+    AgentContainerSpec, ContainerUser, Helpers, HostOs, HostPathMapper, LaunchContext, LaunchRole,
+    Podman, PodmanEnvironment, SandboxArchive, SandboxRoots,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 
@@ -39,7 +41,8 @@ const FAKE_HARNESS: &str =
 struct Fixture {
     podman: Podman,
     context: LaunchContext,
-    bridge_binary: PathBuf,
+    helpers: Helpers,
+    bridge_binary: String,
     label: String,
     _dir: tempfile::TempDir,
 }
@@ -50,8 +53,7 @@ impl Fixture {
             eprintln!("skipping: set CLYEAN_PODMAN_TESTS=1 to run the Podman tests");
             return None;
         }
-        let Some(bridge_binary) = std::env::var_os("CLYEAN_BRIDGE_BINARY").map(PathBuf::from)
-        else {
+        let Ok(bridge_binary) = std::env::var("CLYEAN_BRIDGE_BINARY") else {
             eprintln!("skipping: set CLYEAN_BRIDGE_BINARY to a static build of clyean-bridge");
             return None;
         };
@@ -63,12 +65,24 @@ impl Fixture {
         let layout = ProjectLayout::new(directory.project());
         let podman = Podman::default();
         let image = std::env::var("CLYEAN_TEST_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.into());
-        let root = layout.container_root_dir();
-        populate_from_image(&podman, &image, &root).unwrap();
-        install_fake_harness(&root);
+        let environment = PodmanEnvironment::detect(&podman, HostOs::current()).unwrap();
+        // The roots directory sits in the test's own directory, as it would beside a
+        // Podman graph root there.
+        let roots = SandboxRoots::beside_graph_root(&format!(
+            "{}/containers/storage",
+            dir.path().display()
+        ));
+        let helpers = Helpers::new(podman.clone(), roots.clone());
+        let sandbox = roots.location(SandboxId::generate(), environment.topology);
+        helpers.populate(&sandbox.id, &image).unwrap();
+        let mut archive = SandboxArchive::new();
+        archive.file("/usr/local/bin/clyean", FAKE_HARNESS, 0o755);
         // Profile projection creates every agent's profile before any container starts.
-        std::fs::create_dir_all(root.join("home/clyean-test/.omp/profiles/user-assistant/agent"))
-            .unwrap();
+        archive.directory(
+            "/home/clyean-test/.omp/profiles/user-assistant/agent",
+            0o755,
+        );
+        sandbox.fs(&podman).write(archive).unwrap();
         let config = ProjectConfig::new(
             "0.1.0",
             ProjectType::SoftwareEngineeringProject,
@@ -85,10 +99,14 @@ impl Fixture {
             user: ContainerUser::from_host_user_name("clyean-test"),
             clyean_version: "0.1.0".into(),
             herdr: None,
+            sandbox,
+            host_paths: HostPathMapper::new(environment.topology, HostOs::current()),
+            git_settings: Vec::new(),
         };
         Some(Self {
             podman,
             context,
+            helpers,
             bridge_binary,
             label: format!("{TEST_LABEL}={}", LaunchId::generate()),
             _dir: dir,
@@ -163,7 +181,7 @@ impl Drop for Fixture {
                 let _ = self.podman.output(["rm", "--force", "--ignore", id]);
             }
         }
-        let _ = remove(&self.podman, &self.context.layout.container_root_dir());
+        let _ = self.helpers.remove(&self.context.sandbox.id);
     }
 }
 
@@ -216,14 +234,6 @@ impl Connector for TaggingConnector {
             Ok(Box::new(client) as Box<dyn LocalStream>)
         })
     }
-}
-
-fn install_fake_harness(root: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let harness = root.join("usr/local/bin/clyean");
-    std::fs::create_dir_all(harness.parent().unwrap()).unwrap();
-    std::fs::write(&harness, FAKE_HARNESS).unwrap();
-    std::fs::set_permissions(&harness, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 async fn wait_until_running(podman: &Podman, name: &str) {
@@ -300,15 +310,21 @@ async fn an_agent_container_exposes_only_the_agents_own_profile() {
     let Some(fixture) = Fixture::new() else {
         return;
     };
-    let root = fixture.context.layout.container_root_dir();
-    let omp = root.join("home/clyean-test/.omp");
+    let fs = fixture.context.sandbox.fs(&fixture.podman);
+    let mut archive = SandboxArchive::new();
     for agent in ["user-assistant", "programmer"] {
-        let profile = omp.join("profiles").join(agent).join("agent");
-        std::fs::create_dir_all(&profile).unwrap();
-        std::fs::write(profile.join("agent.db"), format!("store of {agent}")).unwrap();
+        archive.file(
+            &format!("/home/clyean-test/.omp/profiles/{agent}/agent/agent.db"),
+            format!("store of {agent}"),
+            0o600,
+        );
     }
-    std::fs::create_dir_all(omp.join("agent")).unwrap();
-    std::fs::write(omp.join("agent/agent.db"), "unused store").unwrap();
+    archive.file(
+        "/home/clyean-test/.omp/agent/agent.db",
+        "unused store",
+        0o600,
+    );
+    fs.write(archive).unwrap();
 
     let role = LaunchRole::SubAgent {
         work_id: "work-1".into(),
@@ -342,9 +358,65 @@ async fn an_agent_container_exposes_only_the_agents_own_profile() {
     let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
     assert_eq!(lines, ["programmer", "store of programmer", "0"]);
     assert_eq!(
-        std::fs::read_to_string(omp.join("profiles/programmer/agent/from-container")).unwrap(),
-        "written\n",
+        fs.read_file("/home/clyean-test/.omp/profiles/programmer/agent/from-container")
+            .unwrap()
+            .as_deref(),
+        Some(&b"written\n"[..]),
         "the agent's writes reach its profile in the root filesystem"
+    );
+}
+
+#[tokio::test]
+async fn a_root_filesystem_persists_across_containers_until_its_helpers_remove_it() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let run = |script: &str| {
+        let mut spec = fixture.context.agent_container_spec(
+            AgentId::SoftwareArchitect,
+            LaunchRole::Maintenance,
+            Vec::new(),
+        );
+        spec.name = format!("{}-{}", spec.name, LaunchId::generate());
+        let (key, value) = fixture.label.split_once('=').unwrap();
+        spec.labels.push((key.to_string(), value.to_string()));
+        spec.command = ["/bin/sh", "-c", script].map(String::from).to_vec();
+        let output = fixture.podman.command(spec.run_args()).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    run("echo kept > /opt/persisted");
+    assert_eq!(run("cat /opt/persisted"), "kept");
+
+    let id = fixture.context.sandbox.id.clone();
+    let listed = fixture.helpers.list().unwrap();
+    let entry = listed
+        .iter()
+        .find(|root| root.id == id.as_str())
+        .expect("the root is listed");
+    assert!(entry.marker.is_none(), "no provisioning marker yet");
+    assert!(entry.size_kib > 0);
+    fixture.helpers.remove(&id).unwrap();
+    assert!(!fixture.helpers.is_populated(&id).unwrap());
+    assert!(!fixture
+        .helpers
+        .list()
+        .unwrap()
+        .iter()
+        .any(|root| root.id == id.as_str()));
+}
+
+#[tokio::test]
+async fn a_root_filesystem_that_does_not_exist_yet_has_no_marker() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let roots = fixture.helpers.roots().clone();
+    let missing = roots.location(SandboxId::generate(), fixture.context.sandbox.topology);
+    let fs = missing.fs(&fixture.podman);
+    assert_eq!(
+        RootfsMarker::read_existing(fs.as_ref(), &fixture.helpers, &missing.id).unwrap(),
+        None
     );
 }
 

@@ -73,13 +73,85 @@ impl HerdrHostContext {
         env
     }
 
-    /// The host's `herdr` executable, mounted read-only when present.  The socket is not
+    /// The `herdr` executable, mounted read-only when present.  The socket is not
     /// mounted: the bridge relays it (the sanctioned sandbox exception).
-    pub fn executable_mount(&self) -> Option<crate::container::MountSpec> {
-        self.bin_path
-            .as_ref()
-            .map(|bin| crate::container::MountSpec::read_only(bin.clone(), CONTAINER_BIN_PATH))
+    pub fn executable_mount(
+        &self,
+        host_paths: crate::environment::HostPathMapper,
+    ) -> Option<crate::container::MountSpec> {
+        self.bin_path.as_ref().map(|bin| {
+            crate::container::MountSpec::read_only(host_paths.map(bin), CONTAINER_BIN_PATH)
+        })
     }
+}
+
+/// The Herdr release the host runs, from `herdr --version` (`herdr 0.7.4`).
+pub fn host_version(bin: &Path) -> Option<String> {
+    let output = std::process::Command::new(bin)
+        .arg("--version")
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .nth(1)
+        .map(|version| version.trim_start_matches('v').to_string())
+}
+
+const HERDR_RELEASES: &str = "https://api.github.com/repos/herdrdev/herdr/releases";
+
+/// The Linux build of Herdr `version` for containers of architecture `arch_tag`, which
+/// replaces the host's own executable on a Podman machine: downloaded once from Herdr's
+/// GitHub release, verified against the digest GitHub records for it, and cached.
+pub async fn linux_cli(version: &str, arch_tag: &str, cache_dir: &Path) -> crate::Result<PathBuf> {
+    let asset = match arch_tag {
+        "x64" => "herdr-linux-x86_64",
+        _ => "herdr-linux-aarch64",
+    };
+    let cached = cache_dir.join("herdr").join(version).join(asset);
+    if cached.is_file() {
+        return Ok(cached);
+    }
+    let release_url = format!("{HERDR_RELEASES}/tags/v{version}");
+    let failed = |reason: String| crate::SandboxError::Download {
+        url: release_url.clone(),
+        reason,
+    };
+    let client = reqwest::Client::builder()
+        .user_agent("clyean")
+        .build()
+        .map_err(|e| failed(e.to_string()))?;
+    let text = client
+        .get(&release_url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| failed(e.to_string()))?
+        .text()
+        .await
+        .map_err(|e| failed(e.to_string()))?;
+    let release: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| failed(e.to_string()))?;
+    let (url, expected) = release_asset(&release, asset).ok_or_else(|| {
+        failed(format!(
+            "the release has no {asset} with a digest GitHub records"
+        ))
+    })?;
+    crate::provisioning::download_verified(&url, &cached, &expected).await?;
+    Ok(cached)
+}
+
+/// The download address and SHA-256 digest of `asset` in a GitHub release description.
+fn release_asset(release: &serde_json::Value, asset: &str) -> Option<(String, String)> {
+    let entry = release["assets"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["name"] == asset)?;
+    let digest = entry["digest"].as_str()?.strip_prefix("sha256:")?;
+    Some((
+        entry["browser_download_url"].as_str()?.to_string(),
+        digest.to_string(),
+    ))
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -149,6 +221,21 @@ mod tests {
     }
 
     #[test]
+    fn release_assets_are_found_with_their_digests() {
+        let release = serde_json::json!({"assets": [
+            {"name": "herdr-linux-aarch64", "digest": "sha256:aa", "browser_download_url": "https://x/aarch64"},
+            {"name": "herdr-linux-x86_64", "digest": "sha256:bb", "browser_download_url": "https://x/x86_64"},
+            {"name": "herdr-macos-x86_64", "browser_download_url": "https://x/macos"}
+        ]});
+        assert_eq!(
+            release_asset(&release, "herdr-linux-x86_64"),
+            Some(("https://x/x86_64".to_string(), "bb".to_string()))
+        );
+        assert_eq!(release_asset(&release, "herdr-macos-x86_64"), None);
+        assert_eq!(release_asset(&release, "herdr-linux-riscv64"), None);
+    }
+
+    #[test]
     fn container_environment_rewrites_socket_and_bin_paths() {
         let context = HerdrHostContext {
             pane_id: "w1:p1".into(),
@@ -161,7 +248,9 @@ mod tests {
         assert!(env.contains(&("HERDR_SOCKET_PATH".into(), "/run/herdr/herdr.sock".into())));
         assert!(env.contains(&("HERDR_BIN_PATH".into(), "/usr/local/bin/herdr".into())));
         assert!(env.contains(&("HERDR_WORKSPACE_ID".into(), "w1".into())));
-        let mount = context.executable_mount().unwrap();
+        let mount = context
+            .executable_mount(crate::environment::HostPathMapper::Identity)
+            .unwrap();
         assert!(mount.read_only);
         assert_eq!(mount.target, CONTAINER_BIN_PATH);
     }

@@ -26,7 +26,7 @@ Clyean's sandbox promise is that agents cannot modify anything outside the works
 
 ## What the sidebar shows
 
-The reporter sets the pane's displayed agent to `Clyean` and its title to the project directory name (`pane.report_metadata`), and reports the session (`pane.report_agent_session`) on session start, on `/new`, `/resume`, and `/fork`, and at the start of every turn.  The session path is translated to its host path (the workspace mount maps to your workspace directory, everything else to `.clyean/container-root`); paths under `/run` and `/mnt` have no host equivalent and fall back to the session id.
+The reporter sets the pane's displayed agent to `Clyean` and its title to the project directory name (`pane.report_metadata`), and reports the session (`pane.report_agent_session`) on session start, on `/new`, `/resume`, and `/fork`, and at the start of every turn.  The session path is translated to its host path (the workspace mount maps to your workspace directory, everything else to the sandbox root filesystem); paths under `/run` and `/mnt` have no host equivalent and fall back to the session id, and so does every session path on native Windows and macOS, where the root filesystem lives inside the Podman machine.  There, the Herdr CLI in the container is the Linux build of the Herdr release your host runs, downloaded from Herdr's GitHub releases and verified against the digest GitHub records; when it cannot be downloaded, the container has no Herdr CLI.
 
 States (`pane.report_agent`):
 
@@ -51,5 +51,5 @@ Values are milliseconds; invalid or negative values fall back to the defaults.
 ## Troubleshooting
 
 - Nothing in the sidebar: confirm the three variables are set in the pane (`env | grep HERDR`), then run `clyean -v` and look for the `bridge open` line.  Inside the User Assistant, the Herdr CLI (`herdr`) reaches Herdr through the relayed socket.  Clyean requires `HERDR_ENV=1`; a launcher that strips it also strips reporting.
-- The pane is claimed by `omp`: a Herdr `omp` integration file exists under the User Assistant's profile.  Clyean never ships it; remove `~/.omp/profiles/user-assistant/agent/extensions/herdr-omp-agent-state.ts` from `.clyean/container-root/home/<user>/`.
+- The pane is claimed by `omp`: a Herdr `omp` integration file exists under the User Assistant's profile.  Clyean never ships it; remove `home/<user>/.omp/profiles/user-assistant/agent/extensions/herdr-omp-agent-state.ts` under the sandbox root filesystem, whose location `clyean sandbox status` prints (inside the Podman machine on native Windows and macOS, which `podman machine ssh` opens).
 - Herdr ships first-class Clyean support later: the reporter stays silent when `HERDR_CLYEAN_INTEGRATION=1` is set or when `herdr-clyean-agent-state.ts` exists in the profile's extensions directory, so the two never report twice for one pane.

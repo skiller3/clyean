@@ -2,7 +2,9 @@
 
 What this version of Clyean does not do, stated so you can plan around it.
 
-- Sandbox population works on Linux hosts only.  Populating `.clyean/container-root` uses `podman unshare` to extract the image inside Podman's user namespace, which needs rootless Podman on a Linux host.  `clyean` builds for macOS and Windows and its inspection commands work there, but a launch stops at sandbox population.
+- Native Windows and macOS are supported through a Podman machine and have been verified only in continuous integration, through Podman's remote client on Linux, and not yet on real Windows and macOS hosts.  Terminal behavior through the remote client on Windows (resizing, Ctrl-C) is unverified.
+- On a Podman machine, the project must live where the machine sees it: on macOS in a directory the machine shares (your home directory by default), on Windows on a drive the machine mounts.  Clyean checks this before a launch and names what it cannot see.
+- Resetting or removing a Podman machine removes every sandbox stored in it, including the agents' sessions and login stores.
 - Rootless Podman is assumed.  Running Podman as root makes the container's root the host's root, and files written into the workspace would be owned by root.
 - Six agents are implemented: User Assistant, Scaffolder, Software Engineering Director, Specifier, Software Architect, Programmer.  The other ten in `AGENT_SPECS.md` are placeholders: they appear in `clyean agents` but have no instructions, profile, or behavior.  The Software Engineering Director's remote repository access is not implemented yet, so nothing pushes or opens pull requests.
 - `clyean.com` does not exist.  The install one-liners in the scripts' headers point at it; until it exists, download the scripts from the GitHub repository.

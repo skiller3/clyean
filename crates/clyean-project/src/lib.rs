@@ -15,7 +15,7 @@ pub mod plans;
 
 pub use config::{PassthroughEntry, ProjectConfig, ProjectType, SandboxConfig};
 pub use discovery::ProjectDirectory;
-pub use identity::{LaunchId, ProjectId};
+pub use identity::{LaunchId, ProjectId, SandboxId};
 pub use layout::ProjectLayout;
 pub use lock::{ProjectLock, ProjectLockError};
 pub use plans::{PlanCatalog, PlanReference, PlanVersion};

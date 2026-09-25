@@ -237,8 +237,7 @@ impl OrchestratorService {
                 }
                 ProjectState::Unscaffolded(project) => {
                     let _lock =
-                        ProjectLock::acquire(&project.layout, project.pending.use_worktrees)
-                            .map_err(|_| OrchestratorError::ProjectLocked)?;
+                        acquire_project_lock(&project.layout, project.pending.use_worktrees)?;
                     let report = complete_scaffold(
                         &project.directory,
                         &project.layout,

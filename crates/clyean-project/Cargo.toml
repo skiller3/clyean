@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+dunce = { workspace = true }
 fd-lock = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
