@@ -91,6 +91,13 @@ describe("WelcomeComponent", () => {
 		expect(bare).not.toContain("Clyean v");
 	});
 
+	it("leaves two blank rows between the greeting and the logo", () => {
+		const rows = new WelcomeComponent("1.0.0", "", "").render(100).map(row => Bun.stripANSI(row));
+		const greeting = rows.findIndex(row => row.includes("Welcome back!"));
+		const logoTop = rows.findIndex(row => row.includes(Bun.stripANSI(renderLogo(BRAND_LOGO)[0] ?? "").trim()));
+		expect(logoTop - greeting).toBe(3);
+	});
+
 	it("keeps the whole logo in the left column on narrow terminals", () => {
 		const output = Bun.stripANSI(new WelcomeComponent("1.0.0", "", "").render(48).join("\n"));
 		for (const row of renderLogo(BRAND_LOGO)) {

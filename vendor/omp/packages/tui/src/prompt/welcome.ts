@@ -296,6 +296,7 @@ export class WelcomeComponent implements Component {
 			"",
 			this.#centerText(theme.bold("Welcome back!"), leftCol),
 			"",
+			"",
 			...logoColored.map(l => this.#centerText(l, leftCol)),
 			"",
 			this.#centerText(theme.fg("muted", this.modelName), leftCol),
