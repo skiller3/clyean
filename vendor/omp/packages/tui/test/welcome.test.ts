@@ -3,8 +3,8 @@ import {
 	BRAND_LOGO,
 	BRAND_LOGO_HEIGHT,
 	BRAND_LOGO_WIDTH,
-	gradientLogo,
 	pickWeightedTip,
+	renderLogo,
 	WelcomeComponent,
 } from "@oh-my-pi/pi-tui/prompt/welcome";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -84,28 +84,28 @@ describe("WelcomeComponent", () => {
 
 	it("titles the box with the Clyean version, or with the bare name outside Clyean", () => {
 		const versioned = Bun.stripANSI(new WelcomeComponent("0.4.2", "", "").render(100)[0] ?? "");
-		expect(versioned).toContain(" clyean v0.4.2 ");
+		expect(versioned).toContain(" Clyean v0.4.2 ");
 
 		const bare = Bun.stripANSI(new WelcomeComponent("", "", "").render(100)[0] ?? "");
-		expect(bare).toMatch(/─ clyean ─/);
-		expect(bare).not.toContain("clyean v");
+		expect(bare).toMatch(/─ Clyean ─/);
+		expect(bare).not.toContain("Clyean v");
 	});
 
 	it("keeps the whole logo in the left column on narrow terminals", () => {
 		const output = Bun.stripANSI(new WelcomeComponent("1.0.0", "", "").render(48).join("\n"));
-		for (const row of gradientLogo(BRAND_LOGO)) {
+		for (const row of renderLogo(BRAND_LOGO)) {
 			expect(output).toContain(Bun.stripANSI(row).trim());
 		}
 	});
 });
 
-describe("gradientLogo", () => {
+describe("renderLogo", () => {
 	it("pairs pixel rows into half-block cells", () => {
-		expect(gradientLogo(["#.p.", "##.."]).map(row => Bun.stripANSI(row))).toEqual(["▀▄▀ "]);
+		expect(renderLogo(["#.b.", "##.."]).map(row => Bun.stripANSI(row))).toEqual(["▀▄▀ "]);
 	});
 
 	it("renders the brand logo at its declared cell size", () => {
-		const rows = gradientLogo(BRAND_LOGO);
+		const rows = renderLogo(BRAND_LOGO);
 		expect(rows).toHaveLength(BRAND_LOGO_HEIGHT);
 		for (const row of rows) {
 			expect(visibleWidth(row)).toBe(BRAND_LOGO_WIDTH);

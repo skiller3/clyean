@@ -5,8 +5,8 @@ import {
 	BRAND_LOGO_HEIGHT,
 	BRAND_LOGO_WIDTH,
 	gradientEscape,
-	gradientLogo,
 	paintLogo,
+	renderLogo,
 	type ShineConfig,
 } from "../../prompt/welcome";
 import { theme } from "../../theme/theme";
@@ -104,11 +104,10 @@ function waterAmplitude(
 }
 
 /**
- * Animated setup splash, in the spirit of the omp landing page: the brand soap
- * mark rendered with the live diagonal gradient + shine sweep, rising out of a
- * rippling, gradient-lit water surface, under a faint twinkling starfield. The
- * mark and water share one continuous gradient so the sweep reads across the
- * whole scene; the water surface drifts each frame.
+ * Animated setup splash, in the spirit of the omp landing page: the brand
+ * rubber duck floating on a rippling, gradient-lit water surface under a faint
+ * twinkling starfield, with one shine sweeping across the duck and the water
+ * while the water's gradient drifts each frame.
  */
 export function renderSetupSplash(width: number, height: number, elapsedMs: number): string[] {
 	const w = Math.max(1, width);
@@ -117,7 +116,7 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 	const phase = progress * 1.8;
 	const shine: ShineConfig = { pos: (progress * 2.5) % 1, strength: Math.max(0, 1 - progress * 0.35) };
 
-	if (w < MIN_SCENE_WIDTH || h < MIN_SCENE_HEIGHT) return renderCompactSplash(w, h, phase, shine);
+	if (w < MIN_SCENE_WIDTH || h < MIN_SCENE_HEIGHT) return renderCompactSplash(w, h, shine);
 
 	const frame = Math.floor(elapsedMs / SETUP_TICK_MS);
 	const cx = Math.floor(w / 2);
@@ -149,8 +148,8 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 			if (star) put(x, y, star);
 		}
 	}
-	// 3. hero — the brand mark with the live gradient + shine sweep
-	const logo = paintLogo(BRAND_LOGO, (x, y) => screenGradientT(hx + x, hy + y / 2, w, h, phase), phase, shine);
+	// 3. hero — the brand duck with the shine sweep
+	const logo = paintLogo(BRAND_LOGO, shine);
 	logo.forEach((logoCells, row) => {
 		logoCells.forEach((cell, offset) => {
 			if (cell) put(hx + offset, hy + row, cell);
@@ -168,8 +167,8 @@ export function renderSetupSplash(width: number, height: number, elapsedMs: numb
 }
 
 /** Centered fallback for windows too small to hold the full scene. */
-function renderCompactSplash(width: number, height: number, phase: number, shine: ShineConfig): string[] {
-	const content = [...gradientLogo(BRAND_LOGO, phase, shine), "", theme.bold("C l y e a n")];
+function renderCompactSplash(width: number, height: number, shine: ShineConfig): string[] {
+	const content = [...renderLogo(BRAND_LOGO, shine), "", theme.bold("C l y e a n")];
 	const start = Math.max(0, Math.floor((height - content.length) / 2));
 	const lines: string[] = [];
 	for (let y = 0; y < height; y++) {

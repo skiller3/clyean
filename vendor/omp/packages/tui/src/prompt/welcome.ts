@@ -1,7 +1,7 @@
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { CLI_NAME, HARNESS_ATTRIBUTION } from "@oh-my-pi/pi-utils/dirs";
+import { HARNESS_ATTRIBUTION, PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { bgAnsi, fgAnsi } from "../theme/color";
 import type { ColorMode } from "../theme/schema";
 import { theme } from "../theme/theme";
@@ -132,7 +132,7 @@ export interface LspServerInfo {
 }
 
 /**
- * Premium welcome screen with the block-based Clyean soap-bar logo, a
+ * Premium welcome screen with the block-based Clyean rubber duck logo, a
  * two-column layout, and a full-width harness attribution band.
  */
 export class WelcomeComponent implements Component {
@@ -177,7 +177,7 @@ export class WelcomeComponent implements Component {
 	}
 
 	/**
-	 * Play a one-shot intro that sweeps the gradient through every phase
+	 * Play a one-shot intro that sweeps a shine across the logo several times
 	 * before settling on the resting frame. Safe to call multiple times —
 	 * subsequent calls reset and replay.
 	 */
@@ -383,7 +383,7 @@ export class WelcomeComponent implements Component {
 		const lines: string[] = [];
 
 		// Top border with embedded title
-		const title = this.version ? ` ${CLI_NAME} v${this.version} ` : ` ${CLI_NAME} `;
+		const title = this.version ? ` ${PRODUCT_NAME} v${this.version} ` : ` ${PRODUCT_NAME} `;
 		const titlePrefixRaw = hChar.repeat(3);
 		const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
 		const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
@@ -506,32 +506,29 @@ export function renderAttributionLines(innerWidth: number): string[] {
 }
 
 /**
- * Brand mark shared by the welcome and setup surfaces, drawn from
- * assets/clyean-logo.svg: a bar of soap with a glossy highlight band and three
- * bubbles rising from its corner. Each character is one square pixel: `.`
- * empty, `#` soap, `=` highlight band, and `p`, `c`, `v` the pink, cyan, and
- * violet bubbles. Each pair of pixel rows renders as one row of half-block
- * cells (see {@link paintLogo}).
+ * Brand mark shared by the welcome and setup surfaces: a yellow rubber duck in
+ * profile, facing right. Each character is one square pixel: `.` empty (the
+ * eye too, as negative space), `#` the yellow body, and `b` the orange beak.
+ * Each pair of pixel rows renders as one row of half-block cells (see
+ * {@link paintLogo}).
  */
 export const BRAND_LOGO: readonly string[] = [
-	".................vv..",
-	"................v..v.",
-	"...pp.....ccc..v....v",
-	"..p..p...c...c.v....v",
-	"..p..p..c.....c.v..v.",
-	"...pp...c.....c..vv..",
-	"........c.....c......",
-	".........c...c.......",
-	"..........ccc........",
-	".....................",
-	"...###########.......",
-	".##===========##.....",
-	"#################....",
-	"#################....",
-	"#################....",
-	"#################....",
-	".###############.....",
-	"...###########.......",
+	"...........####......",
+	".........########....",
+	"........##########...",
+	"........#######.##...",
+	"........##########bb.",
+	"........##########bbb",
+	"#........########bb..",
+	"##........#######....",
+	"###......##########..",
+	"####....############.",
+	"#####################",
+	"#####################",
+	".###################.",
+	".###################.",
+	"..#################..",
+	"....#############....",
 ];
 
 /** Width of {@link BRAND_LOGO} in terminal cells. */
@@ -540,16 +537,15 @@ export const BRAND_LOGO_WIDTH = Math.max(...BRAND_LOGO.map(row => row.length));
 /** Height of {@link BRAND_LOGO} in terminal cells. */
 export const BRAND_LOGO_HEIGHT = Math.ceil(BRAND_LOGO.length / 2);
 
-/** Gradient positions that give each bubble its own color, as in the SVG. */
-const BUBBLE_GRADIENT_T: Readonly<Record<string, number>> = { p: 0, v: 0.5, c: 1 };
+type Rgb = readonly [number, number, number];
 
-/** White mixed into the highlight band at its ends and at its center. */
-const HIGHLIGHT_EDGE = 0.25;
-const HIGHLIGHT_PEAK = 0.65;
+/** Colors of the logo's pixels. */
+const LOGO_COLORS: Readonly<Record<string, Rgb>> = {
+	"#": [255, 205, 0], // rubber duck yellow
+	b: [255, 120, 0], // beak orange
+};
 
 const RESET = "\x1b[0m";
-
-type Rgb = readonly [number, number, number];
 
 /** Multi-stop palette for the diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
@@ -594,12 +590,6 @@ function towardWhite([r, g, b]: Rgb, amount: number): Rgb {
 	return [r + (255 - r) * amount, g + (255 - g) * amount, b + (255 - b) * amount];
 }
 
-/** Shift gradient position `t` by `phase`, wrapping at 1; a zero phase keeps `t` = 1 at the cyan end. */
-function shiftGradient(t: number, phase: number): number {
-	const normalizedPhase = ((phase % 1) + 1) % 1;
-	return normalizedPhase === 0 ? t : (t + normalizedPhase) % 1;
-}
-
 /**
  * Resolve the gradient SGR foreground escape for a normalized position `t`
  * (0..1) along the diagonal, compositing the optional sliding shine highlight.
@@ -621,27 +611,19 @@ export function gradientEscape(t: number, shine?: ShineConfig): string {
 
 /**
  * Paint pixel art in the {@link BRAND_LOGO} format as rows of half-block cells,
- * `undefined` where a cell is empty. `soapT` maps a soap pixel (column `x`,
- * pixel row `y`) to its gradient position; the bubbles keep their own colors,
- * shifted by `phase`. The optional shine is composited over every pixel.
+ * `undefined` where a cell is empty. The optional shine is a soft white band
+ * composited along the diagonal from the top-left corner, centered at
+ * `shine.pos`.
  */
-export function paintLogo(
-	pixels: readonly string[],
-	soapT: (x: number, y: number) => number,
-	phase = 0,
-	shine?: ShineConfig,
-): (string | undefined)[][] {
+export function paintLogo(pixels: readonly string[], shine?: ShineConfig): (string | undefined)[][] {
 	const mode: ColorMode = TERMINAL.trueColor ? "truecolor" : "256color";
-	const pixelColor = (x: number, y: number): Rgb | undefined => {
-		const row = pixels[y] ?? "";
-		const role = row[x] ?? ".";
-		if (role === ".") return undefined;
-		const bubbleT = BUBBLE_GRADIENT_T[role];
-		const t = paletteT(bubbleT === undefined ? soapT(x, y) : shiftGradient(bubbleT, phase), mode);
-		const color = towardWhite(gradientRgb(t), shineIntensity(t, shine));
-		return role === "=" ? towardWhite(color, highlightAmount(row, x)) : color;
-	};
 	const width = Math.max(...pixels.map(row => row.length));
+	const xSpan = Math.max(1, width - 1);
+	const ySpan = Math.max(1, pixels.length - 1);
+	const pixelColor = (x: number, y: number): Rgb | undefined => {
+		const color = LOGO_COLORS[pixels[y]?.[x] ?? "."];
+		return color && towardWhite(color, shineIntensity((x / xSpan + y / ySpan) / 2, shine));
+	};
 	const rows: (string | undefined)[][] = [];
 	for (let y = 0; y < pixels.length; y += 2) {
 		const cells: (string | undefined)[] = [];
@@ -653,11 +635,9 @@ export function paintLogo(
 	return rows;
 }
 
-/** On 256-color terminals, snap `t` to the ramp's steps so the soap shows clean bands instead of palette noise. */
-function paletteT(t: number, mode: ColorMode): number {
-	if (mode === "truecolor") return t;
-	const steps = GRADIENT_RAMP_256.length - 1;
-	return Math.round(t * steps) / steps;
+/** Render pixel art in the {@link BRAND_LOGO} format as lines, with the optional shine of {@link paintLogo}. */
+export function renderLogo(pixels: readonly string[], shine?: ShineConfig): string[] {
+	return paintLogo(pixels, shine).map(cells => cells.map(cell => cell ?? " ").join(""));
 }
 
 function halfBlockCell(top: Rgb | undefined, bottom: Rgb | undefined, mode: ColorMode): string | undefined {
@@ -671,74 +651,23 @@ function cssRgb([r, g, b]: Rgb): string {
 	return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
 }
 
-/** White mixed into a highlight pixel: strongest mid-band, fading toward both ends like the SVG's shine. */
-function highlightAmount(row: string, x: number): number {
-	let start = x;
-	while (row[start - 1] === "=") start--;
-	let end = x;
-	while (row[end + 1] === "=") end++;
-	const u = end === start ? 0.5 : (x - start) / (end - start);
-	return HIGHLIGHT_EDGE + (HIGHLIGHT_PEAK - HIGHLIGHT_EDGE) * (1 - Math.abs(2 * u - 1));
-}
-
-/** Bounding box of the soap and highlight pixels, which the soap's gradient spans. */
-function soapBounds(pixels: readonly string[]): { left: number; top: number; right: number; bottom: number } {
-	const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
-	pixels.forEach((row, y) => {
-		for (let x = 0; x < row.length; x++) {
-			if (row[x] !== "#" && row[x] !== "=") continue;
-			bounds.left = Math.min(bounds.left, x);
-			bounds.top = Math.min(bounds.top, y);
-			bounds.right = Math.max(bounds.right, x);
-			bounds.bottom = Math.max(bounds.bottom, y);
-		}
-	});
-	return bounds;
-}
-
-/**
- * Render pixel art in the {@link BRAND_LOGO} format with the soap on the SVG's
- * diagonal gradient (top-left → bottom-right across the soap), plus an
- * optional sliding shine band. `phase` (0..1) shifts the gradient, wrapping at
- * 1. When `shine` is provided, a soft white highlight is composited on top,
- * centered at `shine.pos`.
- */
-export function gradientLogo(pixels: readonly string[], phase = 0, shine?: ShineConfig): string[] {
-	const soap = soapBounds(pixels);
-	const xSpan = Math.max(1, soap.right - soap.left);
-	const ySpan = Math.max(1, soap.bottom - soap.top);
-	// SVG's (0,0) → (1,1) gradient projects both normalized axes equally:
-	// top-right and bottom-left land on the purple midpoint.
-	const soapT = (x: number, y: number) => shiftGradient(((x - soap.left) / xSpan + (y - soap.top) / ySpan) / 2, phase);
-	return paintLogo(pixels, soapT, phase, shine).map(cells => cells.map(cell => cell ?? " ").join(""));
-}
-
 /** Total length of the intro animation. */
 const INTRO_MS = 3000;
 /** Render cadence during the intro (~30fps). */
 const INTRO_TICK_MS = 33;
-/** Number of full gradient rotations the sweep performs before settling. */
-const INTRO_SWEEPS = 2.5;
 /** Number of times the shine highlight crosses the diagonal across the intro. */
 const INTRO_SHINE_TRAVERSALS = 3;
 
 /**
- * Logo frame for a normalized intro progress in [0, 1).
- *
- * Ease-out cubic so the spin decelerates into the resting state. The gradient
- * sweeps backward through INTRO_SWEEPS full rotations (`eased == 1` → phase =
- * 0 = resting frame) while the shine traverses the diagonal at a steady pace,
- * decoupled from the gradient phase so the two layers parallax; its strength
- * fades with the same ease-out curve so the highlight is gone by the resting
- * frame.
+ * Logo frame for a normalized intro progress in [0, 1): the shine traverses
+ * the diagonal at a steady pace while its strength fades on an ease-out cubic
+ * curve, so the highlight is gone by the resting frame.
  */
 function introLogoFrame(progress: number): string[] {
 	const eased = 1 - (1 - progress) ** 3;
-	const phase = ((((1 - eased) * INTRO_SWEEPS) % 1) + 1) % 1;
 	const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
-	const shineStrength = (1 - eased) ** 1.5;
-	return gradientLogo(BRAND_LOGO, phase, { strength: shineStrength, pos: shinePos });
+	return renderLogo(BRAND_LOGO, { strength: (1 - eased) ** 1.5, pos: shinePos });
 }
 
-/** Resting gradient frame, cached for re-renders outside of the intro. */
-const REST_FRAME = gradientLogo(BRAND_LOGO, 0);
+/** Resting frame, cached for re-renders outside of the intro. */
+const REST_FRAME = renderLogo(BRAND_LOGO);

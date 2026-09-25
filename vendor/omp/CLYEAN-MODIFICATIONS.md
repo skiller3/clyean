@@ -53,13 +53,13 @@ What the user reads is rebranded; where configuration lives is not.
 
 | File | Change |
 | --- | --- |
-| `prompt/welcome.ts` | Box title `clyean v<version>`, or `clyean` when no version is given; full-width attribution band (`renderAttributionLines`, wraps on narrow terminals) between the columns and the bottom border.  `PI_LOGO` is replaced by `BRAND_LOGO`, pixel art of `assets/clyean-logo.svg` (soap, highlight band, three bubbles) that `paintLogo` and `gradientLogo` render as half-block cells: the soap on the diagonal gradient across its own bounds, the bubbles in fixed gradient colors, and the gradient snapped to the 256-color ramp's steps on 256-color terminals.  The left column is at least `BRAND_LOGO_WIDTH` wide. |
+| `prompt/welcome.ts` | Box title `Clyean v<version>` (`PRODUCT_NAME`), or `Clyean` when no version is given; full-width attribution band (`renderAttributionLines`, wraps on narrow terminals) between the columns and the bottom border.  `PI_LOGO` is replaced by `BRAND_LOGO`, pixel art of a yellow rubber duck in profile facing right (yellow body, eye of negative space, orange beak) that `paintLogo` and `renderLogo` render as half-block cells, with the intro's shine swept across it.  The left column is at least `BRAND_LOGO_WIDTH` wide. |
 | `prompt/tips.txt` | Tips fit Clyean: dropped the ones for the `omp stats` dashboard (unreachable in the sandbox), task isolation (git worktrees, which the host program owns), the auth broker and gateway, and `/collab`/`/join` (pruned).  `omp -c` became `clyean -c`/`clyean -r`, `omp cleanse` became `/cleanse`, `PI_DIALECT` became the Tool Calling Mode setting (the host shell's variables do not reach the harness), the load-balancing tip says Clyean, the drill-in tip says subagent, and a tip says `/login` sign-ins reach the other agents. |
 | `theme/symbols.ts` | `icon.omp` is the brand mark: nerd `\u{f157f}` (nf-md-hand_wash, private-use as the Glyph Protocol requires), unicode `🧼`, ascii `(o)`. |
 | `glyph-protocol.ts` | Comment only: the confirmation codepoint stays upstream's pi mark because the checked-in bundle carries its outline. |
 | `terminal-capabilities.ts` | cmux notification title and OSC 99 app name use `PRODUCT_NAME`. |
 | `desktop-notify.ts` | Notification app name uses `PRODUCT_NAME`. |
-| `setup/wizard-overlay.ts`, `setup/scenes/outro.ts`, `setup/scenes/splash.ts` | `BRAND_LOGO`, `PRODUCT_NAME` wizard title, splash wordmark `C l y e a n`.  The splash draws `BRAND_LOGO` at its own size with `paintLogo` over the screen-wide gradient instead of doubling upstream's glyph art.  The wizard header leaves the logo out when showing it would leave the scene fewer than 10 rows. |
+| `setup/wizard-overlay.ts`, `setup/scenes/outro.ts`, `setup/scenes/splash.ts` | `BRAND_LOGO`, `PRODUCT_NAME` wizard title, splash wordmark `C l y e a n`.  The splash floats the duck at its own size on the water instead of doubling upstream's glyph art.  The wizard header leaves the logo out when showing it would leave the scene fewer than 10 rows. |
 
 ### Tests
 

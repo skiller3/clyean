@@ -1,6 +1,6 @@
 # Relationship to Oh-My-Pi
 
-Clyean contains a fork of [Oh-My-Pi](https://omp.sh/) and sits above it.  The fork is the harness every agent runs on; Clyean is the orchestration layer that coordinates several of those harness processes.  The welcome screen says it plainly: Clyean uses the fabulous Oh-My-Pi harness.
+Clyean contains a fork of [Oh-My-Pi](https://omp.sh/) and sits above it.  The fork is the harness every agent runs on; Clyean is the orchestration layer that coordinates several of those harness processes.  The welcome screen says it plainly: Clyean forks and wraps the wonderful Oh-My-Pi harness.
 
 ## The vendored fork
 
@@ -16,7 +16,7 @@ Modifications to the harness are made in place under `vendor/omp`, kept as narro
 
 ## What is rebranded
 
-What you read: the process name, `--version` (`clyean/<version>`), `--help` (`clyean v<version>`, `$ clyean [COMMAND]`), the welcome box title (which shows the version of the `clyean` program, not the harness's) and its attribution band, terminal and desktop notification titles, the setup wizard, and the brand mark (a bar of soap with rising bubbles in place of π, drawn in half-block characters from the vector logo at `assets/clyean-logo.svg`).  Commands and flags that make no sense inside a sandboxed agent (self-update, collaboration relays, the host browser relay, speech, telemetry to upstream servers, benchmarking tools, worktree and completion management that the host program owns) are unregistered; their source files stay so upstream merges apply cleanly.  With `CLYEAN_AGENT` set, `/model`, `/switch`, `/login`, `/logout`, and `/mcp` state which agent they apply to.
+What you read: the process name, `--version` (`clyean/<version>`), `--help` (`clyean v<version>`, `$ clyean [COMMAND]`), the welcome box title (`Clyean v<version>`, with the version of the `clyean` program, not the harness's) and its attribution band, terminal and desktop notification titles, the setup wizard, and the brand mark (a yellow rubber duck in place of π, drawn in half-block characters).  Commands and flags that make no sense inside a sandboxed agent (self-update, collaboration relays, the host browser relay, speech, telemetry to upstream servers, benchmarking tools, worktree and completion management that the host program owns) are unregistered; their source files stay so upstream merges apply cleanly.  With `CLYEAN_AGENT` set, `/model`, `/switch`, `/login`, `/logout`, and `/mcp` state which agent they apply to.
 
 ## What deliberately is not rebranded
 
