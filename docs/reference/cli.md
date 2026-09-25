@@ -32,7 +32,7 @@ These apply only when no command is given.
 | `--image <IMAGE>` | Image to populate a new project's sandbox from (default `docker.io/library/ubuntu:latest`).  Ignored for scaffolded projects. |
 | `--mount <PATH>` | Host path mounted read-only at `/mnt/<base name>` in every agent container; repeatable.  Ignored for scaffolded projects. |
 
-What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; ask Podman about itself, stopping when it is older than the floor for this operating system (4.9 on Linux and Linux on WSL, 5.0 on native Windows and macOS) and warning about a Podman machine's provider or size; record a sandbox identifier in `.clyean/sandbox.local.json` when the project has none; populate and provision the sandbox root filesystem when missing or outdated; project every agent's profile and record this use in the sandbox marker; find the static bridge executable (see [environment variables](environment-variables.md)); on a Podman machine, check that it sees every bind-mount source; start the orchestrator inside the `clyean` process; run this invocation's own User Assistant container in the foreground (`podman run --rm`); and, once the container runs, open its bridge with `podman exec --interactive`.  The User Assistant's harness starts only once the bridge is serving.
+What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; ask Podman about itself, stopping when it is older than the floor for this operating system (4.9 on Linux and Linux on WSL, 5.0 on native Windows and macOS) and warning about a Podman machine's provider or size; record a sandbox identifier in `.clyean/sandbox.local.json` when the project has none; populate and provision the sandbox root filesystem when missing or outdated, or else replace its harness when it differs from the one this `clyean` installs; project every agent's profile and record this use in the sandbox marker; find the static bridge executable (see [environment variables](environment-variables.md)); on a Podman machine, check that it sees every bind-mount source; start the orchestrator inside the `clyean` process; run this invocation's own User Assistant container in the foreground (`podman run --rm`); and, once the container runs, open its bridge with `podman exec --interactive`.  The User Assistant's harness starts only once the bridge is serving.
 
 Every invocation gets its own container and session, so several invocations of one project can run at once; delegated work stays serialized by the project lock unless the project uses Git worktrees.  Nothing can attach to a running User Assistant, and detaching is disabled.  Ctrl-C is passed to the User Assistant rather than terminating the launcher.  When the User Assistant exits, its container is removed.  When the `clyean` process ends for any other reason, its bridge ends with it, the User Assistant shuts itself down, and Podman removes the container.
 
@@ -44,11 +44,11 @@ Prepares the host scaffold (Git repository, agent files, ignore rules, sandbox, 
 
 ### `clyean sandbox status`
 
-Prints the sandbox identifier and the root filesystem's location on the Podman host, the image, digest, provisioning time and version, and harness version recorded in its marker, the project that used it last and when, and the User Assistants running on it.  Exits 1 when the root is not provisioned.
+Prints the sandbox identifier and the root filesystem's location on the Podman host, the image, digest, provisioning time and version, and harness version and SHA-256 prefix recorded in its marker, the project that used it last and when, and the User Assistants running on it.  Exits 1 when the root is not provisioned.
 
 ### `clyean sandbox build`
 
-Populates and provisions the sandbox root when it is missing or outdated, then refreshes the agent profiles.
+Populates and provisions the sandbox root when it is missing or outdated, or else replaces its harness when it differs from the one this `clyean` installs, then refreshes the agent profiles.
 
 ### `clyean sandbox rebuild`
 

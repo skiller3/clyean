@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use clyean_orchestrator::protocol::{Request, StreamedEvent};
-use clyean_orchestrator::scaffold::{prepare_host_files, refresh_sandbox_files, PendingScaffold};
+use clyean_orchestrator::scaffold::{
+    prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
+};
 use clyean_orchestrator::service::{OrchestratorService, ProjectState, UnscaffoldedProject};
 use clyean_project::ProjectType;
 use serde_json::json;
@@ -38,9 +40,13 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
     }
     let sandbox = runtime.sandbox_config(&pending)?;
     let podman_sandbox = runtime.podman_sandbox()?;
-    let (marker, provisioned) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
-    if provisioned {
-        println!("Provisioned the sandbox root filesystem.");
+    let (marker, preparation) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
+    match &preparation {
+        SandboxPreparation::Provisioned => println!("Provisioned the sandbox root filesystem."),
+        SandboxPreparation::HarnessReplaced { source } => {
+            println!("Replaced the sandbox's harness with {}.", source.display())
+        }
+        SandboxPreparation::Current => {}
     }
     refresh_sandbox_files(
         &runtime.layout,

@@ -24,4 +24,4 @@ Where configuration lives: the user-level config root stays `~/.omp` (with profi
 
 ## How the harness reaches the sandbox
 
-The harness is compiled by CI with bun into a Linux binary and published as the release assets `clyean-harness-linux-x64` and `clyean-harness-linux-arm64`.  `clyean` installs the asset matching its own version into the sandbox at `/usr/local/bin/clyean`, so inside the container the harness is simply `clyean`.  [Manage the sandbox](../how-to/manage-the-sandbox.md) describes the resolution order and how to substitute a locally built harness.
+The harness is compiled by CI with bun into a Linux binary and published as the release assets `clyean-harness-linux-x64` and `clyean-harness-linux-arm64`.  `clyean` installs the asset matching its own version into the sandbox at `/usr/local/bin/clyean`, and replaces it at launch whenever the harness it would install changes, so inside the container the harness is simply `clyean`.  [Manage the sandbox](../how-to/manage-the-sandbox.md) describes the resolution order and how to substitute a locally built harness.
