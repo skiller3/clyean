@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clyean_agents::AgentId;
 use clyean_bridge::host::{self as bridge_host, ConnectFuture, Connector, LocalStream};
-use clyean_orchestrator::scaffold::{prepare_host_files, refresh_sandbox_files, PendingScaffold};
+use clyean_orchestrator::scaffold::{
+    prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
+};
 use clyean_orchestrator::server::handle_connection;
 use clyean_orchestrator::service::{
     OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
@@ -49,12 +51,16 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
     }
     let sandbox = runtime.sandbox_config(&pending)?;
     let podman_sandbox = runtime.podman_sandbox()?;
-    let (marker, provisioned) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
-    if provisioned {
-        eprintln!(
+    let (marker, preparation) = runtime.ensure_sandbox(&podman_sandbox, &sandbox).await?;
+    match &preparation {
+        SandboxPreparation::Provisioned => eprintln!(
             "Provisioned the Podman sandbox (harness {}).",
             marker.harness_version
-        );
+        ),
+        SandboxPreparation::HarnessReplaced { source } => {
+            eprintln!("Replaced the sandbox's harness with {}.", source.display())
+        }
+        SandboxPreparation::Current => {}
     }
     refresh_sandbox_files(
         &runtime.layout,

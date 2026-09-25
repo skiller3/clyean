@@ -17,8 +17,8 @@ use clyean_project::config::DEFAULT_SANDBOX_IMAGE;
 use clyean_project::ignore::ensure_ignore_rules;
 use clyean_project::{ProjectConfig, ProjectDirectory, ProjectLayout, ProjectType, SandboxConfig};
 use clyean_sandbox::provisioning::{
-    ensure_plantuml_jar, provision, resolve_sandbox_executable, ProvisioningInputs, HARNESS,
-    PROVISIONING_VERSION,
+    ensure_plantuml_jar, provision, replace_harness, resolve_sandbox_executable, sha256_of,
+    HarnessReplacement, ProvisioningInputs, HARNESS, PROVISIONING_VERSION,
 };
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
@@ -103,9 +103,23 @@ pub struct SandboxInputs<'a> {
     pub cache_dir: &'a Path,
 }
 
+/// What [`ensure_sandbox`] changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxPreparation {
+    /// The sandbox was current, harness included.
+    Current,
+    /// The root filesystem was populated or provisioned.
+    Provisioned,
+    /// Only the harness was replaced, with the one at `source`.
+    HarnessReplaced { source: PathBuf },
+}
+
 /// Populates and provisions the project's sandbox root filesystem unless a current one
-/// exists.  Returns the marker and whether provisioning ran.
-pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker, bool)> {
+/// exists, and otherwise replaces its harness when it is not the one this `clyean` installs.
+/// Returns the marker and what changed.
+pub async fn ensure_sandbox(
+    inputs: &SandboxInputs<'_>,
+) -> Result<(RootfsMarker, SandboxPreparation)> {
     let fs = inputs.location.fs(inputs.podman);
     let helpers = Helpers::new(inputs.podman.clone(), inputs.environment.sandbox_roots());
     let existing = RootfsMarker::read_existing(fs.as_ref(), &helpers, &inputs.location.id)?;
@@ -113,7 +127,7 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
         if marker.provisioning_version >= PROVISIONING_VERSION
             && marker.image == inputs.sandbox.image
         {
-            return Ok((marker.clone(), false));
+            return Ok(refresh_harness(inputs, marker.clone()).await);
         }
         tracing::info!(target: "clyean::scaffold", "sandbox is outdated; re-provisioning");
     }
@@ -166,7 +180,60 @@ pub async fn ensure_sandbox(inputs: &SandboxInputs<'_>) -> Result<(RootfsMarker,
     })
     .await
     .map_err(|e| OrchestratorError::Workflow(format!("provisioning task failed: {e}")))??;
-    Ok((marker, true))
+    Ok((marker, SandboxPreparation::Provisioned))
+}
+
+/// Replaces the harness of a current sandbox when this `clyean` installs a different one.
+/// When the new harness cannot be found or does not run, the sandbox keeps the one it has,
+/// so a launch without network access still works.
+async fn refresh_harness(
+    inputs: &SandboxInputs<'_>,
+    marker: RootfsMarker,
+) -> (RootfsMarker, SandboxPreparation) {
+    match replace_outdated_harness(inputs, marker.clone()).await {
+        Ok(Some((marker, source))) => (marker, SandboxPreparation::HarnessReplaced { source }),
+        Ok(None) => (marker, SandboxPreparation::Current),
+        Err(error) => {
+            tracing::warn!(target: "clyean::scaffold", "keeping the sandbox's harness: {error}");
+            (marker, SandboxPreparation::Current)
+        }
+    }
+}
+
+async fn replace_outdated_harness(
+    inputs: &SandboxInputs<'_>,
+    marker: RootfsMarker,
+) -> Result<Option<(RootfsMarker, PathBuf)>> {
+    let harness = resolve_sandbox_executable(
+        &HARNESS,
+        inputs.sandbox.harness_binary.as_deref(),
+        inputs.clyean_version,
+        inputs.environment.arch_tag()?,
+        inputs.cache_dir,
+    )
+    .await?;
+    let podman = inputs.podman.clone();
+    let location = inputs.location.clone();
+    let source = harness.path;
+    tokio::task::spawn_blocking(move || {
+        let digest = sha256_of(&source)?;
+        if digest == marker.harness_sha256 {
+            return Ok(None);
+        }
+        tracing::info!(target: "clyean::scaffold", harness = %source.display(), "replacing the sandbox's harness");
+        let fs = location.fs(&podman);
+        let marker = replace_harness(HarnessReplacement {
+            podman: &podman,
+            location: &location,
+            fs: fs.as_ref(),
+            harness_binary: &source,
+            harness_sha256: &digest,
+            marker,
+        })?;
+        Ok(Some((marker, source)))
+    })
+    .await
+    .map_err(|e| OrchestratorError::Workflow(format!("harness replacement task failed: {e}")))?
 }
 
 /// Projects every implemented agent's profile into the root filesystem, once the project

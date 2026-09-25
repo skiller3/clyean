@@ -5,6 +5,7 @@
 //! pinned PlantUML jar, the harness binary, and a verification that all three work.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use clyean_plantuml::render::{CommandOutcome, CommandRunner};
 use clyean_plantuml::{PlantUmlDistribution, PINNED_DISTRIBUTION};
@@ -323,9 +324,11 @@ async fn download_to(url: &str, target: &Path) -> Result<()> {
 }
 
 pub fn sha256_of(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| SandboxError::io(format!("reading {}", path.display()), e))?;
-    Ok(hex::encode(Sha256::digest(&bytes)))
+    let reading = |e| SandboxError::io(format!("reading {}", path.display()), e);
+    let mut file = std::fs::File::open(path).map_err(reading)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(reading)?;
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(unix)]
@@ -370,15 +373,6 @@ pub fn provision(inputs: &ProvisioningInputs<'_>) -> Result<RootfsMarker> {
         &verification_script(&PINNED_DISTRIBUTION),
         "verifying the sandbox",
     )?;
-    let harness_version = verification
-        .lines()
-        .last()
-        .unwrap_or_default()
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
     let provisioned_at = clyean_project::utc_now_rfc3339();
     let marker = RootfsMarker {
         sandbox_id: inputs.location.id.to_string(),
@@ -387,12 +381,79 @@ pub fn provision(inputs: &ProvisioningInputs<'_>) -> Result<RootfsMarker> {
         provisioning_version: PROVISIONING_VERSION,
         clyean_version: inputs.clyean_version.to_string(),
         provisioned_at: provisioned_at.clone(),
-        harness_version,
+        harness_version: harness_version(&verification),
+        harness_sha256: sha256_of(inputs.harness_binary)?,
         project_dir: inputs.project_dir.to_string_lossy().into_owned(),
         last_used_at: provisioned_at,
     };
     marker.write(inputs.fs)?;
     Ok(marker)
+}
+
+/// Inputs of replacing the harness of a provisioned root filesystem.
+pub struct HarnessReplacement<'a> {
+    pub podman: &'a Podman,
+    pub location: &'a SandboxLocation,
+    pub fs: &'a dyn SandboxFs,
+    pub harness_binary: &'a Path,
+    pub harness_sha256: &'a str,
+    pub marker: RootfsMarker,
+}
+
+/// Installs `harness_binary` as the harness of a provisioned root filesystem and records it
+/// in the marker, leaving everything else in the root alone.  The new harness is written
+/// beside the old one under a name of its own and moved over it only once it runs, so a
+/// failed replacement keeps the old harness, containers starting meanwhile always find a
+/// whole one, and running ones keep the harness they started with.
+pub fn replace_harness(replacement: HarnessReplacement<'_>) -> Result<RootfsMarker> {
+    let staging = staging_path(HARNESS_CONTAINER_PATH);
+    let mut archive = SandboxArchive::new();
+    archive.host_file(&staging, replacement.harness_binary, 0o755);
+    replacement.fs.write(archive)?;
+    let runner = RootfsRunner::new(replacement.podman.clone(), replacement.location.clone());
+    let output = run_script(
+        &runner,
+        &replacement_script(&staging, HARNESS_CONTAINER_PATH),
+        "replacing the harness",
+    )?;
+    let marker = RootfsMarker {
+        harness_version: harness_version(&output),
+        harness_sha256: replacement.harness_sha256.to_string(),
+        ..replacement.marker
+    };
+    marker.write(replacement.fs)?;
+    Ok(marker)
+}
+
+/// Script that runs the staged harness and, only when it runs, moves it over `target`.
+fn replacement_script(staging: &str, target: &str) -> String {
+    format!(
+        "set -e\n\
+         trap 'rm -f {staging}' EXIT\n\
+         {staging} --version\n\
+         mv -f {staging} {target}\n"
+    )
+}
+
+/// A path beside `target` that no other staging, in this process or another, uses.
+fn staging_path(target: &str) -> String {
+    static STAGED: AtomicU64 = AtomicU64::new(0);
+    let sequence = STAGED.fetch_add(1, Ordering::Relaxed);
+    format!("{target}.{}-{sequence}.new", std::process::id())
+}
+
+/// The harness version from the output of `clyean --version` (`clyean/<version>`), which
+/// ends the output of the scripts that run it.
+fn harness_version(output: &str) -> String {
+    output
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn run_script(runner: &RootfsRunner, script: &str, context: &str) -> Result<String> {
@@ -487,6 +548,69 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(harness_mode & 0o777, 0o755);
+    }
+
+    #[test]
+    fn digests_are_streamed_from_the_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"abc").unwrap();
+        assert_eq!(
+            sha256_of(file.path()).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn the_harness_version_is_the_last_line_of_the_output() {
+        assert_eq!(
+            harness_version("openjdk 21\nPlantUML 1.2026.8\nclyean/18.2.7\n"),
+            "18.2.7"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_harness_replaces_the_old_one_only_once_it_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("clyean");
+        let target = target.to_str().unwrap();
+        let stage = |script: &str| {
+            let staging = staging_path(target);
+            std::fs::write(&staging, script).unwrap();
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+            staging
+        };
+        let replace = |staging: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", &replacement_script(staging, target)])
+                .output()
+                .unwrap()
+        };
+        let old = "#!/bin/sh\necho clyean/1.0.0\n";
+        std::fs::write(target, old).unwrap();
+
+        let broken = stage("#!/bin/sh\nexit 3\n");
+        assert!(!replace(&broken).status.success());
+        assert!(
+            !Path::new(&broken).exists(),
+            "a failed replacement removes its staging file"
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), old);
+
+        let working = stage("#!/bin/sh\necho clyean/2.0.0\n");
+        let output = replace(&working);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            harness_version(&String::from_utf8_lossy(&output.stdout)),
+            "2.0.0"
+        );
+        assert!(!Path::new(&working).exists());
+        assert_eq!(
+            std::fs::read_to_string(target).unwrap(),
+            "#!/bin/sh\necho clyean/2.0.0\n"
+        );
+        assert_ne!(staging_path(target), staging_path(target));
     }
 
     #[tokio::test]

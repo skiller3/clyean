@@ -17,7 +17,7 @@ At the first launch in a project, Clyean records a random sandbox identifier in 
 clyean sandbox status
 ```
 
-prints the sandbox identifier and location, the image and digest the root was populated from, when and by which Clyean version it was provisioned, the harness version inside, which project used it last and when, and the User Assistants running on it.  It exits 1 when the root is not provisioned.
+prints the sandbox identifier and location, the image and digest the root was populated from, when and by which Clyean version it was provisioned, the harness version inside with the start of its SHA-256, which project used it last and when, and the User Assistants running on it.  It exits 1 when the root is not provisioned.
 
 ```sh
 clyean sandbox shell
@@ -35,6 +35,8 @@ clyean sandbox rebuild   # discard the root filesystem and provision it again
 ```
 
 Provisioning is considered outdated when the marker file `/.clyean-sandbox.json` in the root records an older provisioning schema than the running `clyean`, or an image other than the configured one.  A rebuild discards everything agents installed, and refuses while any container of the sandbox runs, so end the project's `clyean` processes first.
+
+A current sandbox still gets a new harness when it needs one.  At every launch, and in `clyean sandbox build`, `clyean` compares the SHA-256 of the harness it would install (see [Where the harness comes from](#where-the-harness-comes-from)) with the one the marker records, and when they differ it replaces the harness alone.  The new harness is copied in beside the old one and moved over it only after it runs, so containers that are starting always find a whole harness, running ones keep the harness they started with, and packages, sessions, and sign-ins are untouched.  When the new harness cannot be found (for example, offline, before its release has been downloaded) or does not run, the sandbox keeps its harness and `clyean` prints a warning.  Upgrading Clyean therefore upgrades the harness of every sandbox at its next launch.  Note that `clyean` processes of different versions launching on one project take turns installing their own harness.
 
 Population pulls the image, exports a container created from it, and streams the export into a helper container that extracts it into the root, so ownership inside the root is right under rootless Podman on every platform.  Provisioning then runs, inside the root, a package installation with whichever of `apt-get`, `apk`, or `dnf` the image provides (certificates, curl, git, an SSH client, `procps`, Python 3, and a headless Java runtime), installs the pinned PlantUML jar at `/opt/plantuml/`, installs the harness at `/usr/local/bin/clyean`, and verifies all three by running them.
 
@@ -70,7 +72,7 @@ The harness inside the sandbox is the Linux build of Clyean's fork of Oh-My-Pi. 
 3. A file named `clyean-harness-linux-<x64|arm64>` or `clyean-harness` next to the `clyean` executable.
 4. The release asset `clyean-harness-linux-<arch>` of the running Clyean version, downloaded from GitHub into `~/.cache/clyean/harness/<version>/` (or `$XDG_CACHE_HOME/clyean`).
 
-The architecture is the one Podman reports for the host.  Development builds and source installs have no matching release, so point option 1 or 2 at a harness you built.
+The architecture is the one Podman reports for the host.  Development builds and source installs have no matching release, so point option 1, 2, or 3 at a harness you built.  A harness found this way replaces the sandbox's at the next launch when it differs.
 
 ## What is shared and what is not
 

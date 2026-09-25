@@ -28,6 +28,10 @@ pub struct RootfsMarker {
     pub clyean_version: String,
     pub provisioned_at: String,
     pub harness_version: String,
+    /// SHA-256 of the harness installed at `/usr/local/bin/clyean`.  Empty when unknown,
+    /// which makes the next launch install the harness again.
+    #[serde(default)]
+    pub harness_sha256: String,
     /// The host path of the project that used the root filesystem last.
     pub project_dir: String,
     pub last_used_at: String,
@@ -95,6 +99,7 @@ mod tests {
             clyean_version: "0.1.0".into(),
             provisioned_at: "2026-09-21T00:00:00Z".into(),
             harness_version: "18.2.7".into(),
+            harness_sha256: "ab".repeat(32),
             project_dir: "/home/skye/old".into(),
             last_used_at: "2026-09-21T00:00:00Z".into(),
         };

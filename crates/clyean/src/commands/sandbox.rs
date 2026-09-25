@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use clyean_agents::AgentId;
-use clyean_orchestrator::scaffold::{refresh_sandbox_files, PendingScaffold};
+use clyean_orchestrator::scaffold::{refresh_sandbox_files, PendingScaffold, SandboxPreparation};
 use clyean_project::{ProjectLayout, SandboxId};
 use clyean_sandbox::orphans::{list_user_assistant_containers, prune_orphaned_user_assistants};
 use clyean_sandbox::rootfs::RootfsMarker;
@@ -49,7 +49,12 @@ fn status(runtime: &ProjectRuntime, podman_sandbox: &PodmanSandbox) -> Result<i3
                 "Provisioned:  {} by clyean {} (schema {})",
                 marker.provisioned_at, marker.clyean_version, marker.provisioning_version
             );
-            println!("Harness:      {}", marker.harness_version);
+            match marker.harness_sha256.get(..12) {
+                Some(digest) => {
+                    println!("Harness:      {} (sha256 {digest})", marker.harness_version)
+                }
+                None => println!("Harness:      {}", marker.harness_version),
+            }
             println!(
                 "Last used:    {} from {}",
                 marker.last_used_at, marker.project_dir
@@ -108,17 +113,19 @@ async fn build(
         .context("removing the sandbox root filesystem")?;
     }
     println!("Ensuring the sandbox is provisioned from {}", sandbox.image);
-    let (marker, provisioned) = runtime.ensure_sandbox(podman_sandbox, &sandbox).await?;
-    if provisioned {
-        println!(
+    let (marker, preparation) = runtime.ensure_sandbox(podman_sandbox, &sandbox).await?;
+    match &preparation {
+        SandboxPreparation::Provisioned => println!(
             "Provisioned sandbox with harness {} at {}",
             marker.harness_version, marker.provisioned_at
-        );
-    } else {
-        println!(
+        ),
+        SandboxPreparation::HarnessReplaced { source } => {
+            println!("Replaced the sandbox's harness with {}.", source.display())
+        }
+        SandboxPreparation::Current => println!(
             "Sandbox already current (provisioned {}).",
             marker.provisioned_at
-        );
+        ),
     }
     refresh_sandbox_files(
         &runtime.layout,

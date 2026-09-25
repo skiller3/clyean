@@ -20,9 +20,13 @@ use std::time::Duration;
 
 use clyean_agents::AgentId;
 use clyean_bridge::host::{serve, ConnectFuture, Connector, LocalStream};
+use clyean_plantuml::render::CommandRunner;
 use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
 use clyean_project::{ProjectType, SandboxConfig, SandboxId};
 use clyean_sandbox::orphans::{has_running_bridge, lists_a_bridge, prune_matching};
+use clyean_sandbox::provisioning::{
+    replace_harness, sha256_of, HarnessReplacement, RootfsRunner, PROVISIONING_VERSION,
+};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
     AgentContainerSpec, ContainerUser, Helpers, HostOs, HostPathMapper, LaunchContext, LaunchRole,
@@ -404,6 +408,69 @@ async fn a_root_filesystem_persists_across_containers_until_its_helpers_remove_i
         .unwrap()
         .iter()
         .any(|root| root.id == id.as_str()));
+}
+
+#[tokio::test]
+async fn a_new_harness_replaces_the_installed_one_only_once_it_runs() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let location = &fixture.context.sandbox;
+    let fs = location.fs(&fixture.podman);
+    let marker = RootfsMarker {
+        sandbox_id: location.id.to_string(),
+        image: DEFAULT_IMAGE.into(),
+        image_digest: "sha256:test".into(),
+        provisioning_version: PROVISIONING_VERSION,
+        clyean_version: "0.1.0".into(),
+        provisioned_at: "2026-09-25T00:00:00Z".into(),
+        harness_version: "1.0.0".into(),
+        harness_sha256: "ab".repeat(32),
+        project_dir: "/home/clyean-test/proj".into(),
+        last_used_at: "2026-09-25T00:00:00Z".into(),
+    };
+    marker.write(fs.as_ref()).unwrap();
+    let host = tempfile::tempdir().unwrap();
+    let harness = |name: &str, script: &str| {
+        let path = host.path().join(name);
+        std::fs::write(&path, script).unwrap();
+        path
+    };
+    let replace = |binary: &std::path::Path| {
+        replace_harness(HarnessReplacement {
+            podman: &fixture.podman,
+            location,
+            fs: fs.as_ref(),
+            harness_binary: binary,
+            harness_sha256: &sha256_of(binary).unwrap(),
+            marker: marker.clone(),
+        })
+    };
+    let installed = || fs.read_file("/usr/local/bin/clyean").unwrap().unwrap();
+
+    let broken = harness("broken", "#!/bin/sh\nexit 3\n");
+    assert!(replace(&broken).is_err());
+    assert_eq!(installed(), FAKE_HARNESS.as_bytes());
+    assert_eq!(
+        RootfsMarker::read(fs.as_ref()).unwrap(),
+        Some(marker.clone())
+    );
+
+    let working = harness("working", "#!/bin/sh\necho clyean/99.1.0\n");
+    let replaced = replace(&working).unwrap();
+    assert_eq!(replaced.harness_version, "99.1.0");
+    assert_eq!(replaced.harness_sha256, sha256_of(&working).unwrap());
+    assert_eq!(installed(), std::fs::read(&working).unwrap());
+    assert_eq!(RootfsMarker::read(fs.as_ref()).unwrap(), Some(replaced));
+
+    let listing = RootfsRunner::new(fixture.podman.clone(), location.clone())
+        .run(&["ls".into(), "/usr/local/bin".into()])
+        .unwrap();
+    assert_eq!(
+        listing.stdout.split_whitespace().collect::<Vec<_>>(),
+        ["clyean"],
+        "no staged harness is left behind"
+    );
 }
 
 #[tokio::test]

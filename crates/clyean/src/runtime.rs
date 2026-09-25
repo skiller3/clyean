@@ -17,7 +17,9 @@ use clyean_harness::session::BoxFuture;
 use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession, UiRequestHandler};
 use clyean_orchestrator::agents::AgentSessionFactory;
 use clyean_orchestrator::credentials::{plan_delivery, CredentialRenewals, Delivery};
-use clyean_orchestrator::scaffold::{ensure_sandbox, PendingScaffold, SandboxInputs};
+use clyean_orchestrator::scaffold::{
+    ensure_sandbox, PendingScaffold, SandboxInputs, SandboxPreparation,
+};
 use clyean_orchestrator::service::DiagramRenderer;
 use clyean_orchestrator::CredentialAuthority;
 use clyean_plantuml::render::render_directory;
@@ -146,7 +148,7 @@ impl ProjectRuntime {
         &self,
         podman_sandbox: &PodmanSandbox,
         sandbox: &SandboxConfig,
-    ) -> Result<(RootfsMarker, bool)> {
+    ) -> Result<(RootfsMarker, SandboxPreparation)> {
         let inputs = SandboxInputs {
             podman: &self.podman,
             environment: &podman_sandbox.environment,
