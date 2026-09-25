@@ -42,3 +42,9 @@ Inside the container, `CLYEAN_HERDR_IDLE_DEBOUNCE_MS` (default 250) and `CLYEAN_
 | Variable | Effect |
 | --- | --- |
 | `CLYEAN_INSTALL_DIR` | Directory that receives the executable: default `~/.local/bin` (`install.sh`) or `%LOCALAPPDATA%\clyean` (`install.ps1`). |
+
+## Building
+
+| Variable | Effect |
+| --- | --- |
+| `CLYEAN_RELEASE_VERSION` | Read when `clyean` and `clyean-bridge` are compiled: the version they report, for example `0.2.0`, in place of the workspace version from `Cargo.toml`.  Release builds set it from the release tag, and so do the install scripts' source builds.  Leave it unset for development builds. |

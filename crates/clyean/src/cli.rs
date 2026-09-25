@@ -5,7 +5,12 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release tag's version, which release builds stamp through `CLYEAN_RELEASE_VERSION`, or
+/// the workspace version for any other build.
+pub const VERSION: &str = match option_env!("CLYEAN_RELEASE_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
 
 /// Clyean: a zero-slop agentic coding harness.
 ///
