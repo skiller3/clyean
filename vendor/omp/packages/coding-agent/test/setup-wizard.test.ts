@@ -14,7 +14,7 @@ import {
 	type SetupSceneHost,
 	selectSetupScenes,
 } from "@oh-my-pi/pi-coding-agent/modes/setup";
-import { BRAND_LOGO, gradientLogo } from "@oh-my-pi/pi-tui/prompt/welcome";
+import { BRAND_LOGO, renderLogo } from "@oh-my-pi/pi-tui/prompt/welcome";
 import { providersSetupScene } from "@oh-my-pi/pi-tui/setup/scenes/providers";
 import { themeSetupScene } from "@oh-my-pi/pi-tui/setup/scenes/theme";
 import { WebSearchTab } from "@oh-my-pi/pi-tui/setup/scenes/web-search";
@@ -422,7 +422,7 @@ describe("setup wizard short terminals", () => {
 
 	it("shows the brand logo above the scene only when the terminal has room for both", async () => {
 		await initTheme(false, "unicode", false, "titanium", "light");
-		const logoRows = gradientLogo(BRAND_LOGO).map(row => Bun.stripANSI(row).trim());
+		const logoRows = renderLogo(BRAND_LOGO).map(row => Bun.stripANSI(row).trim());
 		for (const [rows, shown] of [
 			[40, true],
 			[24, false],

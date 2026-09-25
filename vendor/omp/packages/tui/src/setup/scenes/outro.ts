@@ -1,6 +1,6 @@
 import { centerLine } from "../../utils";
 import { padToWidth } from "../../render/utils";
-import { BRAND_LOGO, gradientLogo } from "../../prompt/welcome";
+import { BRAND_LOGO, renderLogo } from "../../prompt/welcome";
 import { theme } from "../../theme/theme";
 import { renderStarfield, SETUP_TICK_MS } from "./splash";
 
@@ -10,7 +10,7 @@ export function renderSetupOutro(width: number, height: number, elapsedMs: numbe
 	const frame = Math.floor(elapsedMs / SETUP_TICK_MS);
 	const lines = renderStarfield(width, height, frame + 1000);
 	const progress = Math.max(0, Math.min(1, elapsedMs / SETUP_OUTRO_MS));
-	const logo = gradientLogo(BRAND_LOGO, progress * 1.2, { pos: (progress * 2) % 1, strength: 1 - progress });
+	const logo = renderLogo(BRAND_LOGO, { pos: (progress * 2) % 1, strength: 1 - progress });
 	const title = theme.bold(theme.fg("success", `${theme.status.success} Setup saved`));
 	const subtitle = theme.fg("muted", "Handing off to the normal CLI…");
 	const sweepWidth = Math.max(1, Math.min(width - 8, Math.floor((width - 8) * progress)));

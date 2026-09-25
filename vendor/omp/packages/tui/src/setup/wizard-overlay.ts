@@ -4,7 +4,7 @@ import { centerLine, padding } from "../utils";
 import { padToWidth } from "../render/utils";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
-import { BRAND_LOGO, BRAND_LOGO_HEIGHT, gradientLogo } from "../prompt/welcome";
+import { BRAND_LOGO, BRAND_LOGO_HEIGHT, renderLogo } from "../prompt/welcome";
 import { theme } from "../theme/theme";
 import type { SetupHost } from "./scenes/types";
 import { renderSetupOutro, SETUP_OUTRO_MS } from "./scenes/outro";
@@ -204,7 +204,7 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 			centerLine(theme.fg("dim", "↑/↓ select · enter confirm · esc skip · ctrl+c exit setup"), width),
 		];
 		if (height - header.length - footer.length - BRAND_LOGO_HEIGHT >= MIN_SCENE_ROWS_WITH_LOGO) {
-			header.splice(1, 0, ...gradientLogo(BRAND_LOGO, 0).map(line => centerLine(line, width)));
+			header.splice(1, 0, ...renderLogo(BRAND_LOGO).map(line => centerLine(line, width)));
 		}
 		this.#bodyRowStart = header.length;
 		const maxBodyLines = Math.max(0, height - header.length - footer.length);
