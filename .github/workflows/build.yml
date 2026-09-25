@@ -176,7 +176,7 @@ jobs:
       - name: Harness starts
         run: bun packages/coding-agent/src/cli.ts --version
       - name: Welcome screen tests
-        run: bun test packages/tui/test/welcome.test.ts
+        run: bun test packages/tui/test/welcome.test.ts packages/coding-agent/test/welcome-tips.test.ts
 
   build-cli:
     name: Build clyean (${{ matrix.asset }})
