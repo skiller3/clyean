@@ -31,5 +31,9 @@ pub const ORCHESTRATOR_CHANNEL: &str = "orchestrator";
 /// The channel carrying the Herdr socket API, passed through unmodified.
 pub const HERDR_CHANNEL: &str = "herdr";
 
-/// The version of the bridge executable, which matches the `clyean` release it ships with.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version of the bridge executable, which matches the `clyean` release it ships with:
+/// release builds stamp the tag's version through `CLYEAN_RELEASE_VERSION`.
+pub const VERSION: &str = match option_env!("CLYEAN_RELEASE_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};

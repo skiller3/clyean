@@ -214,6 +214,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # Release builds report the tag's version instead of the workspace version.
+      - name: Stamp the release version
+        if: inputs.upload_release_tag != ''
+        shell: bash
+        env:
+          TAG: ${{ inputs.upload_release_tag }}
+        run: echo "CLYEAN_RELEASE_VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -232,7 +239,13 @@ jobs:
       - name: Smoke test
         if: matrix.target != 'x86_64-apple-darwin'
         shell: bash
-        run: ./dist/${{ matrix.asset }} --version
+        run: |
+          version="$(./dist/${{ matrix.asset }} --version)"
+          echo "$version"
+          if [ -n "${CLYEAN_RELEASE_VERSION:-}" ] && [ "$version" != "clyean ${CLYEAN_RELEASE_VERSION}" ]; then
+            echo "expected clyean ${CLYEAN_RELEASE_VERSION}" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -257,6 +270,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # Release builds report the tag's version instead of the workspace version.
+      - name: Stamp the release version
+        if: inputs.upload_release_tag != ''
+        shell: bash
+        env:
+          TAG: ${{ inputs.upload_release_tag }}
+        run: echo "CLYEAN_RELEASE_VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -273,7 +293,12 @@ jobs:
       - name: Smoke test
         shell: bash
         run: |
-          ./dist/${{ matrix.asset }} --version
+          version="$(./dist/${{ matrix.asset }} --version)"
+          echo "$version"
+          if [ -n "${CLYEAN_RELEASE_VERSION:-}" ] && [ "$version" != "clyean-bridge ${CLYEAN_RELEASE_VERSION}" ]; then
+            echo "expected clyean-bridge ${CLYEAN_RELEASE_VERSION}" >&2
+            exit 1
+          fi
           if ldd "dist/${{ matrix.asset }}" 2>/dev/null | grep -q '=>'; then
             echo "the bridge must be statically linked" >&2
             exit 1

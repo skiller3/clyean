@@ -40,6 +40,8 @@ The preceding scripts are expected to install any necessary required dependencie
 
 Both scripts install the prebuilt `clyean` executable published as a GitHub release asset named `clyean-<platform>-<arch>` (`linux`, `darwin`, or `windows`; `x64` or `arm64`; `.exe` on Windows), verify it against the release's `SHA256SUMS`, and smoke-test it with `clyean --version` before reporting success.  Both accept a release tag (`--ref`/`-Ref`), a source build via `cargo install` (`--source`/`-Source`), and an opt-out of dependency installation (`--no-deps`/`-NoDeps`).  They never prompt, because their standard input is the download pipe.
 
+Release builds of `clyean` and its bridge report the semantic version of the tag they are built from (for release `v0.2.0`, `clyean --version` prints `clyean 0.2.0`), and `clyean` uses that version to find its release's harness and bridge.  The installers' source builds of a tag report the same version.  Builds made any other way report the workspace version in `Cargo.toml`.
+
 No `clyean.com` website is currently launched; please just author the two install scripts at the top level of the `clyean` repository for now.
 
 

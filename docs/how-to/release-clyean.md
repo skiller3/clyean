@@ -11,8 +11,8 @@ Clyean follows trunk-based development: features land on branches cut from `main
 | `test-rust` | On Ubuntu 24.04 (Podman 4.9.3) and Ubuntu 26.04 (Podman 5.7.0): `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, a static build of the bridge, and `cargo test --workspace` with `CLYEAN_PODMAN_TESTS=1` and `CLYEAN_BRIDGE_BINARY` so the Podman-backed tests run on the runner. |
 | `test-extensions` | `bun test extensions` for the two harness extensions against stub socket servers. |
 | `test-harness` | Installs the vendored harness's dependencies, stages the prebuilt native addons for the vendored version from npm, runs `--version`, and runs the welcome screen tests. |
-| `build-cli` | Builds `clyean` for the six host targets: `clyean-linux-x64`, `clyean-linux-arm64`, `clyean-darwin-x64`, `clyean-darwin-arm64`, `clyean-windows-x64.exe`, `clyean-windows-arm64.exe`. |
-| `build-bridge` | Builds the static (musl) bridge for Linux x64 and arm64 as `clyean-bridge-linux-x64` and `clyean-bridge-linux-arm64`, and checks that they are statically linked. |
+| `build-cli` | Builds `clyean` for the six host targets: `clyean-linux-x64`, `clyean-linux-arm64`, `clyean-darwin-x64`, `clyean-darwin-arm64`, `clyean-windows-x64.exe`, `clyean-windows-arm64.exe`.  In a release run it stamps the tag's version (see [Versions](#versions)) and checks it with `--version`. |
+| `build-bridge` | Builds the static (musl) bridge for Linux x64 and arm64 as `clyean-bridge-linux-x64` and `clyean-bridge-linux-arm64`, and checks that they are statically linked.  In a release run it stamps and checks the tag's version like `build-cli`. |
 | `build-harness` | Compiles the contained harness with bun for Linux x64 and arm64 as `clyean-harness-linux-x64` and `clyean-harness-linux-arm64`. |
 | `publish` | Only with a release tag: writes `SHA256SUMS` and attaches every asset to the GitHub release for that tag. |
 
@@ -36,12 +36,16 @@ Every push to a `release/**` branch runs `release-patch-tag.yml`.  If the head a
 
 Major bumps are manual by design: create and push `v<MAJOR+1>.0.0` by hand together with the matching `release/v<MAJOR+1>.0` branch.  Tags pushed by a person trigger the Release workflow directly through its `push` trigger; later runs of Cut release continue from that tag.
 
+## Versions
+
+The version in the workspace `Cargo.toml` is what development builds report.  Release builds report the tag's version instead: `build.yml` sets `CLYEAN_RELEASE_VERSION` to the tag without its `v` for the `clyean` and bridge builds, so `clyean --version` from release `v0.2.0` prints `clyean 0.2.0`, and the smoke tests fail the release when a binary reports anything else.  `clyean` downloads the harness and bridge of the version it reports, so the stamp also ties a release's `clyean` to that release's other assets.  Nothing is committed for a release; the tag is the only record of its version.
+
 ## Why releases are dispatched explicitly
 
 Tags pushed by a workflow with `GITHUB_TOKEN` do not trigger `push` events.  The cut and patch workflows therefore run `gh workflow run release.yml --ref <tag> -f tag=<tag>`.  The Release workflow refuses to run unless its ref is the tag it was asked to publish.
 
 ## Install scripts
 
-`install.sh` and `install.ps1` at the repository root download the asset for the host platform from the latest release (or `--ref <tag>` / `-Ref <tag>`), verify it against `SHA256SUMS`, smoke-test `clyean --version`, and install missing host dependencies (Git, curl, Podman) with the system package manager, printing each command.  `--no-deps` / `-NoDeps` prints instructions instead, and `--source` / `-Source` builds with `cargo install --locked --git https://github.com/skiller3/clyean --tag <tag> clyean`.  Until `clyean.com` serves them, reference the raw GitHub URLs.
+`install.sh` and `install.ps1` at the repository root download the asset for the host platform from the latest release (or `--ref <tag>` / `-Ref <tag>`), verify it against `SHA256SUMS`, smoke-test `clyean --version`, and install missing host dependencies (Git, curl, Podman) with the system package manager, printing each command.  `--no-deps` / `-NoDeps` prints instructions instead, and `--source` / `-Source` builds with `cargo install --locked --git https://github.com/skiller3/clyean --tag <tag> clyean`, with `CLYEAN_RELEASE_VERSION` set from the tag so the build reports the release's version.  Until `clyean.com` serves them, reference the raw GitHub URLs.
 
-Note that the harness binary inside the sandbox is downloaded separately by `clyean` for the version it runs (see [Manage the sandbox](manage-the-sandbox.md)), so a source install needs `CLYEAN_HARNESS_BINARY` or a published release of the same version.
+Note that the harness binary inside the sandbox is downloaded separately by `clyean` for the version it runs (see [Manage the sandbox](manage-the-sandbox.md)).  A source build from the install scripts reports its tag's version and so downloads that release's harness; any other source build reports the workspace version and needs `CLYEAN_HARNESS_BINARY`.

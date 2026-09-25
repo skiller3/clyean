@@ -294,7 +294,11 @@ function Install-ViaCargo {
     Write-Host "Building clyean $tag from source..."
     $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("clyean-install-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+    # The script may run in the caller's session (irm | iex), so the variable is restored afterwards.
+    $previousReleaseVersion = $env:CLYEAN_RELEASE_VERSION
+    $env:CLYEAN_RELEASE_VERSION = $tag -replace '^v', ''
     try {
+        Write-Host "+ `$env:CLYEAN_RELEASE_VERSION = '$env:CLYEAN_RELEASE_VERSION'"
         Write-Host "+ cargo install --locked --git https://github.com/$Repo --tag $tag --root $tmpRoot clyean"
         Invoke-Native { cargo install --locked --git "https://github.com/$Repo" --tag $tag --root $tmpRoot clyean }
         if ($LASTEXITCODE -ne 0) {
@@ -303,6 +307,7 @@ function Install-ViaCargo {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         Copy-Item -Path (Join-Path $tmpRoot "bin\clyean.exe") -Destination (Join-Path $InstallDir "clyean.exe") -Force
     } finally {
+        $env:CLYEAN_RELEASE_VERSION = $previousReleaseVersion
         Remove-Item -Recurse -Force $tmpRoot -ErrorAction SilentlyContinue
     }
     Complete-Install

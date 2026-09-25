@@ -381,7 +381,7 @@ install_via_cargo() {
     echo "Building clyean $TAG from source..."
     TMP_ROOT="$(mktemp -d)"
     trap 'rm -rf "$TMP_ROOT"' EXIT
-    run_logged cargo install --locked --git "https://github.com/${REPO}" --tag "$TAG" --root "$TMP_ROOT" clyean
+    run_logged env CLYEAN_RELEASE_VERSION="${TAG#v}" cargo install --locked --git "https://github.com/${REPO}" --tag "$TAG" --root "$TMP_ROOT" clyean
     mkdir -p "$INSTALL_DIR"
     cp "$TMP_ROOT/bin/clyean" "$INSTALL_DIR/clyean"
     chmod +x "$INSTALL_DIR/clyean"
