@@ -4,9 +4,9 @@
 # (including WSL), the rustup musl target for that architecture, and bun.
 [alias]
 # clyean, the static bridge, and the harness.
-build-bin = "run -q -p xtask -- build-bin"
+build-bin = "run -v -p xtask -- build-bin"
 buildlocal = "build-bin"
 # clyean alone.
-build-cli = "run -q -p xtask -- build-cli"
+build-cli = "run -v -p xtask -- build-cli"
 # The static bridge alone.
-build-bridge = "run -q -p xtask -- build-bridge"
+build-bridge = "run -v -p xtask -- build-bridge"

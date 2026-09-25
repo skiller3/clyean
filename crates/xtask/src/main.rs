@@ -94,7 +94,7 @@ fn build_cli(root: &Path) -> Result<()> {
     run(cargo()
         .args(["install", "--path", "crates/clyean", "--root"])
         .arg(root)
-        .args(["--locked", "--force"])
+        .args(["--locked", "--force", "--verbose"])
         .current_dir(root))
 }
 
@@ -103,7 +103,13 @@ fn build_bridge(root: &Path, arch: Arch) -> Result<()> {
     run(cargo()
         .args(["install", "--path", "crates/clyean-bridge", "--root"])
         .arg(root)
-        .args(["--locked", "--force", "--target", arch.musl_target()])
+        .args([
+            "--locked",
+            "--force",
+            "--verbose",
+            "--target",
+            arch.musl_target(),
+        ])
         .current_dir(root))
 }
 
@@ -112,7 +118,7 @@ fn build_bridge(root: &Path, arch: Arch) -> Result<()> {
 fn build_harness(root: &Path, arch: Arch) -> Result<()> {
     let omp = root.join("vendor/omp");
     run(Command::new("bun")
-        .args(["install", "--frozen-lockfile"])
+        .args(["install", "--frozen-lockfile", "--verbose"])
         .current_dir(&omp))?;
     stage_native_addons(root, &omp, arch)?;
     let target = format!("linux-{}", arch.tag());
@@ -141,11 +147,11 @@ fn stage_native_addons(root: &Path, omp: &Path, arch: Arch) -> Result<()> {
         std::fs::create_dir_all(&partial)?;
         let tarball = partial.join("package.tgz");
         run(Command::new("curl")
-            .args(["-fsSL", "--retry", "3", "-o"])
+            .args(["--fail", "--location", "--retry", "3", "-o"])
             .arg(&tarball)
             .arg(native_addons_url(&package, &version)))?;
         run(Command::new("tar")
-            .arg("-xzf")
+            .arg("-xvzf")
             .arg(&tarball)
             .arg("-C")
             .arg(&partial))?;
