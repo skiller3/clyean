@@ -72,7 +72,7 @@ The harness inside the sandbox is the Linux build of Clyean's fork of Oh-My-Pi. 
 3. A file named `clyean-harness-linux-<x64|arm64>` or `clyean-harness` next to the `clyean` executable.
 4. The release asset `clyean-harness-linux-<arch>` of the running Clyean version, downloaded from GitHub into `~/.cache/clyean/harness/<version>/` (or `$XDG_CACHE_HOME/clyean`).
 
-The architecture is the one Podman reports for the host.  Development builds and source installs have no matching release, so point option 1, 2, or 3 at a harness you built.  A harness found this way replaces the sandbox's at the next launch when it differs.
+The architecture is the one Podman reports for the host.  Development builds and source installs have no matching release, so point option 1, 2, or 3 at a harness you built; `cargo build-bin` builds one into option 3's place (see [Build Clyean locally](build-clyean-locally.md)).  A harness found this way replaces the sandbox's at the next launch when it differs.
 
 ## What is shared and what is not
 

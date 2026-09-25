@@ -5,7 +5,8 @@
 *.pdb
 *.profraw
 # Cargo.lock is intentionally tracked: clyean ships binaries.
-# Local host build produced by `cargo build-bin` (cargo install --root .)
+# Local builds from `cargo build-bin`, `cargo build-cli`, and `cargo build-bridge` (see
+# .cargo/config.toml); cargo install --root . also writes the two files after it.
 /bin/
 /.crates.toml
 /.crates2.json

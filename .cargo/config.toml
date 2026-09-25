@@ -1,10 +1,12 @@
-# `cargo build-bin` installs the clyean executable for the host OS and
-# architecture at bin/clyean. --force is required because cargo install
-# refuses to overwrite a binary whose crate version has not changed.
+# Local builds into bin/, where a clyean built there finds the bridge and the harness
+# beside itself.  The commands live in crates/xtask; the bridge and the harness are Linux
+# executables for the architecture Podman runs containers on, so they need a Linux host
+# (including WSL), the rustup musl target for that architecture, and bun.
 [alias]
-build-bin = "install --path crates/clyean --root . --locked --force"
-# `cargo build-bridge` installs the static bridge that User Assistant containers mount
-# at bin/clyean-bridge, beside bin/clyean, where clyean finds it.  It needs
-# `rustup target add x86_64-unknown-linux-musl` once.  On an ARM64 host, run the same
-# cargo install command with --target aarch64-unknown-linux-musl instead.
-build-bridge = "install --path crates/clyean-bridge --root . --locked --force --target x86_64-unknown-linux-musl"
+# clyean, the static bridge, and the harness.
+build-bin = "run -q -p xtask -- build-bin"
+buildlocal = "build-bin"
+# clyean alone.
+build-cli = "run -q -p xtask -- build-cli"
+# The static bridge alone.
+build-bridge = "run -q -p xtask -- build-bridge"

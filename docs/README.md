@@ -16,6 +16,7 @@ The documentation follows [Diátaxis](https://diataxis.fr/): tutorials teach, ho
 - [Manage the sandbox](how-to/manage-the-sandbox.md): where each project's root filesystem lives; inspect, build, rebuild, prune, and enter the Podman sandbox; change the image, mounts, and harness binary.
 - [Resume interrupted work](how-to/resume-interrupted-work.md): find unfinished work in journals and resume or cancel it.
 - [Use print mode](how-to/use-print-mode.md): drive the User Assistant from scripts with `clyean -p`.
+- [Build Clyean locally](how-to/build-clyean-locally.md): build `clyean`, the static bridge, and the harness into `bin/` with `cargo build-bin`, or one of them alone.
 - [Release Clyean](how-to/release-clyean.md): what CI runs, how to cut a release, and how patch tags and assets are produced.
 
 ## Reference
