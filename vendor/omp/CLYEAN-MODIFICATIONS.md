@@ -9,7 +9,7 @@ Upstream snapshot at the time of writing: 18.2.7 (upstream commit `97f945c130`).
 What the user reads is rebranded; where configuration lives is not.
 
 - `packages/utils/src/dirs.ts` gains `PRODUCT_NAME = "Clyean"`, `CLI_NAME = "clyean"`, and `HARNESS_ATTRIBUTION`.  `APP_NAME = "omp"` and `CONFIG_DIR_NAME = ".omp"` stay untouched because they name on-disk paths, log files, XDG directories, `OMP_*`/`PI_*` environment variables, and the HTTP user agent.
-- `packages/utils/src/clyean.ts` (new, exported from the package index) provides `getClyeanAgent()` and `agentScopeSuffix()`, which read `CLYEAN_AGENT` from the environment.
+- `packages/utils/src/clyean.ts` (new, exported from the package index) provides `getClyeanAgent()` and `agentScopeSuffix()`, which read `CLYEAN_AGENT` from the environment, and `getClyeanVersion()`, which reads `CLYEAN_VERSION`.
 - `@oh-my-pi/*` package names, upstream documentation links, code comments, protocol strings, and identifiers that other software matches on are left alone.
 
 ## Inventory of changed files
@@ -19,14 +19,16 @@ What the user reads is rebranded; where configuration lives is not.
 | File | Change |
 | --- | --- |
 | `src/dirs.ts` | Added `PRODUCT_NAME`, `CLI_NAME`, `HARNESS_ATTRIBUTION` beside `APP_NAME`. |
-| `src/clyean.ts` | New: `getClyeanAgent`, `agentScopeSuffix`. |
+| `src/clyean.ts` | New: `getClyeanAgent`, `agentScopeSuffix`, `getClyeanVersion`. |
 | `src/index.ts` | Re-exports `./clyean`. |
 
 ### `packages/coding-agent/src`
 
 | File | Change |
 | --- | --- |
-| `cli.ts` | `CLI_NAME` for `process.title`, the OS process name, and the CLI `bin` (drives `--version` = `clyean/<ver>` and `--help` = `clyean v<ver>`, `$ clyean [COMMAND]`).  Removed the `--alias` dispatch branch. |
+| `cli.ts` | `CLI_NAME` for `process.title`, the OS process name, and the CLI `bin` (drives `--version` = `clyean/<ver>` and `--help` = `clyean v<ver>`, `$ clyean [COMMAND]`).  Removed the `--alias` dispatch branch.  The startup prepaint's welcome box shows `getClyeanVersion()` instead of the harness version. |
+| `main.ts` | Interactive mode's welcome box shows `getClyeanVersion()` (no version outside Clyean) instead of the harness version. |
+| `modes/interactive-mode.ts` | The welcome box's model and provider labels are blank, not `Unknown`, while no model is selected. |
 | `cli-commands.ts` | Removed the pruned subcommand entries (list below).  Reserved-word hints (`clyean extensions is not a management command ...`) use `CLI_NAME`. |
 | `cli/args.ts` | Removed the parse arms for `--alias`, `--from-claude`, `--from-codex` (they now surface as unknown flags).  `CLI_NAME` in usage messages.  The `Args` fields stay so `commands/launch.ts` and `main.ts` compile unchanged; they are never set. |
 | `cli/flag-tables.ts` | Removed `--from-claude` and `--from-codex` from `VALUELESS_FLAGS` and `SESSION_SOURCE_FLAGS`. |
@@ -51,18 +53,20 @@ What the user reads is rebranded; where configuration lives is not.
 
 | File | Change |
 | --- | --- |
-| `prompt/welcome.ts` | Box title `clyean v<version>`; full-width attribution band (`renderAttributionLines`, wraps on narrow terminals) between the columns and the bottom border; `PI_LOGO` renamed to `BRAND_LOGO` with the soap-bar art. |
+| `prompt/welcome.ts` | Box title `clyean v<version>`, or `clyean` when no version is given; full-width attribution band (`renderAttributionLines`, wraps on narrow terminals) between the columns and the bottom border.  `PI_LOGO` is replaced by `BRAND_LOGO`, pixel art of `assets/clyean-logo.svg` (soap, highlight band, three bubbles) that `paintLogo` and `gradientLogo` render as half-block cells: the soap on the diagonal gradient across its own bounds, the bubbles in fixed gradient colors, and the gradient snapped to the 256-color ramp's steps on 256-color terminals.  The left column is at least `BRAND_LOGO_WIDTH` wide. |
 | `theme/symbols.ts` | `icon.omp` is the brand mark: nerd `\u{f157f}` (nf-md-hand_wash, private-use as the Glyph Protocol requires), unicode `🧼`, ascii `(o)`. |
 | `glyph-protocol.ts` | Comment only: the confirmation codepoint stays upstream's pi mark because the checked-in bundle carries its outline. |
 | `terminal-capabilities.ts` | cmux notification title and OSC 99 app name use `PRODUCT_NAME`. |
 | `desktop-notify.ts` | Notification app name uses `PRODUCT_NAME`. |
-| `setup/wizard-overlay.ts`, `setup/scenes/outro.ts`, `setup/scenes/splash.ts` | `BRAND_LOGO`, `PRODUCT_NAME` wizard title, splash wordmark `C l y e a n`. |
+| `setup/wizard-overlay.ts`, `setup/scenes/outro.ts`, `setup/scenes/splash.ts` | `BRAND_LOGO`, `PRODUCT_NAME` wizard title, splash wordmark `C l y e a n`.  The splash draws `BRAND_LOGO` at its own size with `paintLogo` over the screen-wide gradient instead of doubling upstream's glyph art.  The wizard header leaves the logo out when showing it would leave the scene fewer than 10 rows. |
 
 ### Tests
 
-`packages/coding-agent/test`: `acp-builtins.test.ts` (dropped the four `/wt` cases), `acp-initialize-conformance.test.ts`, `blob-uploaders-cloud-drives.test.ts`, `cli-argv-routing.test.ts` (`update` example replaced by `gc`), `flag-tables.test.ts`, `install-command.test.ts`, `power-assertion-options.test.ts`, `profile-bootstrap.test.ts`, `profile-cli.test.ts`, `startup-composer.test.ts`, `terminal-title-state.test.ts`, `collab/registry-smoke.test.ts` (real-CLI collab case skipped), `join-command.test.ts` (skipped), `share.test.ts` (real-CLI share case skipped), `slash-commands/collab-list.test.ts` (skipped), `slash-commands/collab-qrcode.test.ts` (skipped).
+`packages/coding-agent/test`: `acp-builtins.test.ts` (dropped the four `/wt` cases), `acp-initialize-conformance.test.ts`, `blob-uploaders-cloud-drives.test.ts`, `cli-argv-routing.test.ts` (`update` example replaced by `gc`), `flag-tables.test.ts`, `install-command.test.ts`, `power-assertion-options.test.ts`, `profile-bootstrap.test.ts`, `profile-cli.test.ts`, `setup-wizard.test.ts` (logo in the wizard header), `startup-composer.test.ts` (blank model labels without a model), `terminal-title-state.test.ts`, `collab/registry-smoke.test.ts` (real-CLI collab case skipped), `join-command.test.ts` (skipped), `share.test.ts` (real-CLI share case skipped), `slash-commands/collab-list.test.ts` (skipped), `slash-commands/collab-qrcode.test.ts` (skipped).
 
-`packages/tui/test`: `desktop-notify.test.ts`, `hook-selector-overflow.test.ts`, `notifications.test.ts`.
+`packages/tui/test`: `desktop-notify.test.ts`, `hook-selector-overflow.test.ts`, `notifications.test.ts`, `welcome.test.ts` (box title and brand logo cases).
+
+`packages/utils/test`: `clyean.test.ts` (new).
 
 Skipped tests are kept verbatim under `describe.skip` / `test.skip` with a one-line Clyean note so upstream edits to them still merge.
 

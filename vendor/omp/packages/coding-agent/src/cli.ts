@@ -20,6 +20,7 @@ import type { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { CLI_NAME, MIN_BUN_VERSION, resolveProfileEnv, setProfile, VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { getClyeanVersion } from "@oh-my-pi/pi-utils/clyean";
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
@@ -525,7 +526,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		// keeps the TUI graph out of worker, subcommand, help, and version launches.
 		// Loading it statically would erase the measured cold-start improvement.
 		const { beginStartupComposer, stopPendingStartupComposer } = await import("./modes/startup-composer");
-		beginStartupComposer({ version: VERSION });
+		beginStartupComposer({ version: getClyeanVersion() });
 		stopStartupComposer = stopPendingStartupComposer;
 	}
 

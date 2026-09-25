@@ -2,6 +2,8 @@ import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { CLI_NAME, HARNESS_ATTRIBUTION } from "@oh-my-pi/pi-utils/dirs";
+import { bgAnsi, fgAnsi } from "../theme/color";
+import type { ColorMode } from "../theme/schema";
 import { theme } from "../theme/theme";
 import tipsText from "./tips.txt" with { type: "text" };
 
@@ -267,7 +269,7 @@ export class WelcomeComponent implements Component {
 		}
 		const dualContentWidth = boxWidth - 3; // 3 = │ + │ + │
 		const preferredLeftCol = 26;
-		const minLeftCol = 12; // logo width
+		const minLeftCol = BRAND_LOGO_WIDTH;
 		const minRightCol = 20;
 		// Dynamic model/provider labels are truncated inside the fixed column.
 		// Letting them influence the responsive breakpoint changes the box height
@@ -381,7 +383,7 @@ export class WelcomeComponent implements Component {
 		const lines: string[] = [];
 
 		// Top border with embedded title
-		const title = ` ${CLI_NAME} v${this.version} `;
+		const title = this.version ? ` ${CLI_NAME} v${this.version} ` : ` ${CLI_NAME} `;
 		const titlePrefixRaw = hChar.repeat(3);
 		const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
 		const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
@@ -504,11 +506,50 @@ export function renderAttributionLines(innerWidth: number): string[] {
 }
 
 /**
- * Block-grid brand mark shared by the welcome and setup surfaces: a bar of
- * soap with a glossy highlight band and two bubbles rising from it. Every row
- * is 12 cells wide, the width budget the welcome layout reserves for the logo.
+ * Brand mark shared by the welcome and setup surfaces, drawn from
+ * assets/clyean-logo.svg: a bar of soap with a glossy highlight band and three
+ * bubbles rising from its corner. Each character is one square pixel: `.`
+ * empty, `#` soap, `=` highlight band, and `p`, `c`, `v` the pink, cyan, and
+ * violet bubbles. Each pair of pixel rows renders as one row of half-block
+ * cells (see {@link paintLogo}).
  */
-export const BRAND_LOGO = ["   ○     ○  ", " ▗████████▖ ", " ██▓▒░░▒▓██ ", " ██████████ ", " ▝████████▘ "];
+export const BRAND_LOGO: readonly string[] = [
+	".................vv..",
+	"................v..v.",
+	"...pp.....ccc..v....v",
+	"..p..p...c...c.v....v",
+	"..p..p..c.....c.v..v.",
+	"...pp...c.....c..vv..",
+	"........c.....c......",
+	".........c...c.......",
+	"..........ccc........",
+	".....................",
+	"...###########.......",
+	".##===========##.....",
+	"#################....",
+	"#################....",
+	"#################....",
+	"#################....",
+	".###############.....",
+	"...###########.......",
+];
+
+/** Width of {@link BRAND_LOGO} in terminal cells. */
+export const BRAND_LOGO_WIDTH = Math.max(...BRAND_LOGO.map(row => row.length));
+
+/** Height of {@link BRAND_LOGO} in terminal cells. */
+export const BRAND_LOGO_HEIGHT = Math.ceil(BRAND_LOGO.length / 2);
+
+/** Gradient positions that give each bubble its own color, as in the SVG. */
+const BUBBLE_GRADIENT_T: Readonly<Record<string, number>> = { p: 0, v: 0.5, c: 1 };
+
+/** White mixed into the highlight band at its ends and at its center. */
+const HIGHLIGHT_EDGE = 0.25;
+const HIGHLIGHT_PEAK = 0.65;
+
+const RESET = "\x1b[0m";
+
+type Rgb = readonly [number, number, number];
 
 /** Multi-stop palette for the diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
@@ -530,78 +571,146 @@ export interface ShineConfig {
 	pos: number;
 }
 
+/** Gradient color at a normalized position `t` (0..1) along the diagonal. */
+function gradientRgb(t: number): Rgb {
+	// 5-stop palette widens the visible color range and avoids the
+	// deep-blue valley a naive HSL lerp falls into.
+	const stops = GRADIENT_STOPS;
+	const seg = t * (stops.length - 1);
+	const i = Math.min(stops.length - 2, Math.floor(seg));
+	const f = seg - i;
+	const a = stops[i];
+	const b = stops[i + 1];
+	return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+/** Opacity of the sliding shine highlight at gradient position `t`, in [0, 1]. */
+function shineIntensity(t: number, shine?: ShineConfig): number {
+	if (!shine || shine.strength <= 0) return 0;
+	return Math.max(0, 1 - Math.abs(t - shine.pos) / SHINE_HALF_WIDTH) * shine.strength;
+}
+
+function towardWhite([r, g, b]: Rgb, amount: number): Rgb {
+	return [r + (255 - r) * amount, g + (255 - g) * amount, b + (255 - b) * amount];
+}
+
+/** Shift gradient position `t` by `phase`, wrapping at 1; a zero phase keeps `t` = 1 at the cyan end. */
+function shiftGradient(t: number, phase: number): number {
+	const normalizedPhase = ((phase % 1) + 1) % 1;
+	return normalizedPhase === 0 ? t : (t + normalizedPhase) % 1;
+}
+
 /**
  * Resolve the gradient SGR foreground escape for a normalized position `t`
  * (0..1) along the diagonal, compositing the optional sliding shine highlight.
- * Shared by {@link gradientLogo} and the setup splash so both stay
- * color-identical (truecolor when available, 256-color ramp otherwise).
+ * The setup splash paints its water with it (truecolor when available,
+ * 256-color ramp otherwise).
  */
 export function gradientEscape(t: number, shine?: ShineConfig): string {
-	const shineStrength = shine && shine.strength > 0 ? shine.strength : 0;
-	const shinePos = shine ? shine.pos : 0;
+	const intensity = shineIntensity(t, shine);
 	if (TERMINAL.trueColor) {
-		// 5-stop palette widens the visible color range and avoids the
-		// deep-blue valley a naive HSL lerp falls into.
-		const stops = GRADIENT_STOPS;
-		const seg = t * (stops.length - 1);
-		const i = Math.min(stops.length - 2, Math.floor(seg));
-		const f = seg - i;
-		const a = stops[i];
-		const b = stops[i + 1];
-		let r = a[0] + (b[0] - a[0]) * f;
-		let g = a[1] + (b[1] - a[1]) * f;
-		let bl = a[2] + (b[2] - a[2]) * f;
-		if (shineStrength > 0) {
-			const dist = Math.abs(t - shinePos);
-			const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
-			if (intensity > 0) {
-				r += (255 - r) * intensity;
-				g += (255 - g) * intensity;
-				bl += (255 - bl) * intensity;
-			}
-		}
-		return `\x1b[38;2;${Math.round(r)};${Math.round(g)};${Math.round(bl)}m`;
+		const [r, g, b] = towardWhite(gradientRgb(t), intensity);
+		return `\x1b[38;2;${Math.round(r)};${Math.round(g)};${Math.round(b)}m`;
 	}
 	const ramp = GRADIENT_RAMP_256;
 	let idx = Math.min(ramp.length - 1, Math.max(0, Math.floor(t * (ramp.length - 1) + 0.5)));
-	if (shineStrength > 0) {
-		const dist = Math.abs(t - shinePos);
-		const intensity = Math.max(0, 1 - dist / SHINE_HALF_WIDTH) * shineStrength;
-		// Promote to the brightest ramp slot when the shine band peaks here.
-		if (intensity > 0.5) idx = ramp.length - 1;
-	}
+	// Promote to the brightest ramp slot when the shine band peaks here.
+	if (intensity > 0.5) idx = ramp.length - 1;
 	return `\x1b[38;5;${ramp[idx]}m`;
 }
 
 /**
- * Apply a multi-stop diagonal gradient (top-left → bottom-right) plus an
- * optional sliding shine band across multi-line art. `phase` (0..1) shifts the
- * gradient along the diagonal, wrapping at 1. When `shine` is provided, a soft
- * white highlight is composited on top, centered at `shine.pos`.
+ * Paint pixel art in the {@link BRAND_LOGO} format as rows of half-block cells,
+ * `undefined` where a cell is empty. `soapT` maps a soap pixel (column `x`,
+ * pixel row `y`) to its gradient position; the bubbles keep their own colors,
+ * shifted by `phase`. The optional shine is composited over every pixel.
  */
-export function gradientLogo(lines: readonly string[], phase = 0, shine?: ShineConfig): string[] {
-	const reset = "\x1b[0m";
-	const rows = lines.length;
-	const cols = Math.max(...lines.map(l => l.length));
-	const xSpan = Math.max(1, cols - 1);
-	const ySpan = Math.max(1, rows - 1);
-	const normalizedPhase = ((phase % 1) + 1) % 1;
-	return lines.map((line, y) => {
-		let result = "";
-		for (let x = 0; x < line.length; x++) {
-			const char = line[x];
-			if (char === " ") {
-				result += char;
-				continue;
-			}
-			// SVG's (0,0) → (1,1) gradient projects both normalized axes
-			// equally: top-right and bottom-left land on the purple midpoint.
-			const base = (x / xSpan + y / ySpan) / 2;
-			const t = normalizedPhase === 0 ? base : (base + normalizedPhase) % 1;
-			result += gradientEscape(t, shine) + char + reset;
+export function paintLogo(
+	pixels: readonly string[],
+	soapT: (x: number, y: number) => number,
+	phase = 0,
+	shine?: ShineConfig,
+): (string | undefined)[][] {
+	const mode: ColorMode = TERMINAL.trueColor ? "truecolor" : "256color";
+	const pixelColor = (x: number, y: number): Rgb | undefined => {
+		const row = pixels[y] ?? "";
+		const role = row[x] ?? ".";
+		if (role === ".") return undefined;
+		const bubbleT = BUBBLE_GRADIENT_T[role];
+		const t = paletteT(bubbleT === undefined ? soapT(x, y) : shiftGradient(bubbleT, phase), mode);
+		const color = towardWhite(gradientRgb(t), shineIntensity(t, shine));
+		return role === "=" ? towardWhite(color, highlightAmount(row, x)) : color;
+	};
+	const width = Math.max(...pixels.map(row => row.length));
+	const rows: (string | undefined)[][] = [];
+	for (let y = 0; y < pixels.length; y += 2) {
+		const cells: (string | undefined)[] = [];
+		for (let x = 0; x < width; x++) {
+			cells.push(halfBlockCell(pixelColor(x, y), pixelColor(x, y + 1), mode));
 		}
-		return result;
+		rows.push(cells);
+	}
+	return rows;
+}
+
+/** On 256-color terminals, snap `t` to the ramp's steps so the soap shows clean bands instead of palette noise. */
+function paletteT(t: number, mode: ColorMode): number {
+	if (mode === "truecolor") return t;
+	const steps = GRADIENT_RAMP_256.length - 1;
+	return Math.round(t * steps) / steps;
+}
+
+function halfBlockCell(top: Rgb | undefined, bottom: Rgb | undefined, mode: ColorMode): string | undefined {
+	if (top && bottom) return `${fgAnsi(cssRgb(top), mode)}${bgAnsi(cssRgb(bottom), mode)}▀${RESET}`;
+	if (top) return `${fgAnsi(cssRgb(top), mode)}▀${RESET}`;
+	if (bottom) return `${fgAnsi(cssRgb(bottom), mode)}▄${RESET}`;
+	return undefined;
+}
+
+function cssRgb([r, g, b]: Rgb): string {
+	return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
+
+/** White mixed into a highlight pixel: strongest mid-band, fading toward both ends like the SVG's shine. */
+function highlightAmount(row: string, x: number): number {
+	let start = x;
+	while (row[start - 1] === "=") start--;
+	let end = x;
+	while (row[end + 1] === "=") end++;
+	const u = end === start ? 0.5 : (x - start) / (end - start);
+	return HIGHLIGHT_EDGE + (HIGHLIGHT_PEAK - HIGHLIGHT_EDGE) * (1 - Math.abs(2 * u - 1));
+}
+
+/** Bounding box of the soap and highlight pixels, which the soap's gradient spans. */
+function soapBounds(pixels: readonly string[]): { left: number; top: number; right: number; bottom: number } {
+	const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+	pixels.forEach((row, y) => {
+		for (let x = 0; x < row.length; x++) {
+			if (row[x] !== "#" && row[x] !== "=") continue;
+			bounds.left = Math.min(bounds.left, x);
+			bounds.top = Math.min(bounds.top, y);
+			bounds.right = Math.max(bounds.right, x);
+			bounds.bottom = Math.max(bounds.bottom, y);
+		}
 	});
+	return bounds;
+}
+
+/**
+ * Render pixel art in the {@link BRAND_LOGO} format with the soap on the SVG's
+ * diagonal gradient (top-left → bottom-right across the soap), plus an
+ * optional sliding shine band. `phase` (0..1) shifts the gradient, wrapping at
+ * 1. When `shine` is provided, a soft white highlight is composited on top,
+ * centered at `shine.pos`.
+ */
+export function gradientLogo(pixels: readonly string[], phase = 0, shine?: ShineConfig): string[] {
+	const soap = soapBounds(pixels);
+	const xSpan = Math.max(1, soap.right - soap.left);
+	const ySpan = Math.max(1, soap.bottom - soap.top);
+	// SVG's (0,0) → (1,1) gradient projects both normalized axes equally:
+	// top-right and bottom-left land on the purple midpoint.
+	const soapT = (x: number, y: number) => shiftGradient(((x - soap.left) / xSpan + (y - soap.top) / ySpan) / 2, phase);
+	return paintLogo(pixels, soapT, phase, shine).map(cells => cells.map(cell => cell ?? " ").join(""));
 }
 
 /** Total length of the intro animation. */

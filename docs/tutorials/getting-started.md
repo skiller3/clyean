@@ -36,7 +36,7 @@ Clyean then:
 2. Writes `.clyean/agents/` (baseline instructions and per-agent settings), and `.clyean/.gitignore` with the rules Git does not already honor.
 3. Checks Podman's version (4.9 or later on Linux and Linux on WSL, 5.0 or later on native Windows and macOS), records a sandbox identifier in `.clyean/sandbox.local.json`, and populates the project's sandbox root filesystem from `ubuntu:latest`, beside Podman's own data, then provisions it: a Java runtime, the pinned PlantUML jar, and the contained harness.  This takes a few minutes the first time and downloads a few hundred megabytes; later launches skip it.
 4. Projects each agent's profile into the sandbox and starts the orchestrator inside the `clyean` process.
-5. Starts this invocation's own User Assistant container, connects your terminal to it, and opens the bridge that links the container to the orchestrator.  You are now talking to the User Assistant inside the sandbox; the welcome box reads `clyean v<harness version>` and credits the Oh-My-Pi harness.
+5. Starts this invocation's own User Assistant container, connects your terminal to it, and opens the bridge that links the container to the orchestrator.  You are now talking to the User Assistant inside the sandbox; the welcome box reads `clyean v<version>` (the version of the `clyean` you ran), shows the soap logo, and credits the Oh-My-Pi harness.
 
 The harness needs a model provider.  Either export the provider's variable (for example `ANTHROPIC_API_KEY`) before running `clyean`, or use `/login` in the User Assistant.  Either way, the other agents receive what they need for their models when they start.  [Configure agents](../how-to/configure-agents.md) has the details.
 

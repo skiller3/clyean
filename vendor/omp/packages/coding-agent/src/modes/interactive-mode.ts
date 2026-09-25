@@ -1162,8 +1162,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				preferences,
 				welcome: {
 					version,
-					modelName: session.model?.name ?? "Unknown",
-					providerName: session.model?.provider ?? "Unknown",
+					modelName: session.model?.name ?? "",
+					providerName: session.model?.provider ?? "",
 					lspServers: lspServers?.map(server => ({
 						name: server.name,
 						status: server.status,
@@ -1461,8 +1461,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 
 		// Get current model info for welcome screen
-		const modelName = this.session.model?.name ?? "Unknown";
-		const providerName = this.session.model?.provider ?? "Unknown";
+		const modelName = this.session.model?.name ?? "";
+		const providerName = this.session.model?.provider ?? "";
 
 		// Prepaint started this scan before the runtime module graph loaded. Only
 		// scan here when no startup composer exists (non-TTY/embedded hosts) or
@@ -5973,8 +5973,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#updateWelcomeModel(): void {
-		const modelName = this.session.model?.name ?? "Unknown";
-		const providerName = this.session.model?.provider ?? "Unknown";
+		const modelName = this.session.model?.name ?? "";
+		const providerName = this.session.model?.provider ?? "";
 		this.composer.updateWelcome({ modelName, providerName });
 		this.#persistComposerWelcome(modelName, providerName);
 		this.#persistComposerStatus();

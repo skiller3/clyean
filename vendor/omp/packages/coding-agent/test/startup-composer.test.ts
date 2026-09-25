@@ -734,6 +734,45 @@ describe("Composer prepaint", () => {
 		}
 	});
 
+	it("leaves the welcome's model labels blank while no model is selected", async () => {
+		const terminal = new CountingTerminal(80, 32);
+		const composer = new Composer({ preferences: config, terminal, welcome: { version: "9.9.9" } });
+		composer.start();
+		const lease = new ComposerLease(composer);
+		const testSession = await createTestSession({ inMemory: true });
+		Object.defineProperty(testSession.session, "model", { value: undefined });
+		let mode: InteractiveMode | undefined;
+
+		try {
+			mode = new InteractiveMode(
+				testSession.session,
+				"9.9.9",
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				lease.composer,
+			);
+			lease.adopt();
+			vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+			await mode.init({ suppressWelcomeIntro: true });
+			await terminal.waitForRender();
+
+			const output = terminal
+				.getViewport()
+				.map(row => Bun.stripANSI(row))
+				.join("\n");
+			expect(output).toContain("Welcome back!");
+			expect(output).not.toContain("Unknown");
+		} finally {
+			mode?.stop();
+			lease.dispose();
+			await testSession.cleanup();
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("preferences feed applies quiet mode", async () => {
 		const terminal = new CountingTerminal(80, 32);
 		beginStartupComposer({

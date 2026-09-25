@@ -76,7 +76,7 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | Variable | Value | Present in |
 | --- | --- | --- |
 | `CLYEAN_AGENT` | The agent identifier (see below). | all agents |
-| `CLYEAN_VERSION` | Version of the `clyean` host program that launched the container. | all agents |
+| `CLYEAN_VERSION` | Version of the `clyean` host program that launched the container.  The User Assistant's welcome box shows it. | all agents |
 | `CLYEAN_PROJECT_DIR` | Absolute container path of the project directory. | all agents |
 | `CLYEAN_WORKSPACE_DIR` | Absolute container path of the workspace mount. | all agents |
 | `CLYEAN_HOST_WORKSPACE_DIR` | Absolute host path of the workspace directory. | all agents |

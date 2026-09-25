@@ -7,7 +7,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Clyean: a zero-slop agentic coding harness.
+/// Clyean: the slop-scrubbing agentic coding harness.
 ///
 /// Without a subcommand, `clyean` scaffolds the current directory when needed and starts a
 /// User Assistant agent of its own in the project's Podman sandbox.
