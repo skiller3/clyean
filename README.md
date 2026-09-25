@@ -1,6 +1,6 @@
 # Clyean
 
-Zero-slop agentic coding harness.
+Slop-scrubbing agentic coding harness.
 
 Clyean is an orchestration layer for software development by AI agents.  It contains a fork of the [Oh-My-Pi](https://omp.sh/) harness and coordinates several instances of it, one per specialized agent (a User Assistant you talk to, a Scaffolder, a Software Engineering Director, a Specifier, a Software Architect, and a Programmer), so that every change to a project starts from its written specification and architecture and ends in reviewed, committed code.  Every agent runs in a Podman container on a root filesystem that belongs to the project, and every step of every workflow is journaled and committed, so work survives interruption and history says which agent did what.
 
