@@ -14,9 +14,9 @@ Variables read by the `clyean` host program.  The variables an agent sees inside
 | `TERM`, `COLORTERM`, `TERM_PROGRAM` | Copied into the User Assistant container so the terminal UI renders for your terminal. |
 | `PATH` | Searched for `podman`, `git`, and (inside a Herdr pane) `herdr`. |
 
-## Passed into every agent container
+## Passed into the User Assistant's container
 
-Host variables whose names match one of these patterns are copied into every agent container unchanged; `sandbox.passthroughEnv` in `project.json` adds exact names or patterns with a leading or trailing `*`.
+Host variables whose names match one of these patterns are copied into the User Assistant's container unchanged.  A sub-agent receives only the variables the harness reads for its models' providers.  `sandbox.passthroughEnv` in `project.json` adds exact names or patterns with a leading or trailing `*`, for the User Assistant or for the agents an entry lists; see [Configure agents](../how-to/configure-agents.md#credentials-for-the-agents).  The harness's auth broker variables, `OMP_AUTH_BROKER_URL` and `OMP_AUTH_BROKER_TOKEN`, are never passed on their own.
 
 | Pattern or name | Purpose |
 | --- | --- |
@@ -24,7 +24,6 @@ Host variables whose names match one of these patterns are copied into every age
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE`, `AWS_BEARER_TOKEN_BEDROCK` | AWS and Bedrock credentials. |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION` | Azure OpenAI. |
 | `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` | Google Cloud.  Note that a credentials file path must also be reachable inside the container, for example through a mount. |
-| `OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN` | The harness's auth broker. |
 
 ## Herdr
 
@@ -32,7 +31,7 @@ Host variables whose names match one of these patterns are copied into every age
 | --- | --- |
 | `HERDR_ENV` | Must be `1` for Clyean to report to Herdr. |
 | `HERDR_PANE_ID` | The pane to report for; required for reporting. |
-| `HERDR_SOCKET_PATH` | The host socket to mount into the User Assistant container; required for reporting. |
+| `HERDR_SOCKET_PATH` | The host socket the bridge relays into the User Assistant container; required for reporting. |
 | `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID` | Propagated into the container when present; also count as pane-detection signals. |
 | `HERDR_BIN_PATH` | The `herdr` executable to mount read-only; when unset, `herdr` on `PATH` is used if it exists. |
 

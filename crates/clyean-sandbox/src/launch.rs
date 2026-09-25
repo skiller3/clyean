@@ -4,9 +4,12 @@
 //! Composition of the container of one agent from the project, the sandbox
 //! configuration, the Herdr context, and the agent's role in a unit of work.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use clyean_agents::profile::{container_daemon_dirs, container_overlay_path};
+use clyean_agents::profile::{
+    container_credentials_bundle_path, container_daemon_dirs, container_overlay_path,
+    container_profile_root, host_profile_root,
+};
 use clyean_agents::AgentId;
 use clyean_plantuml::render::{CommandOutcome, CommandRunner};
 use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
@@ -50,8 +53,13 @@ pub enum LaunchRole {
         launch_id: LaunchId,
         bridge_binary: PathBuf,
     },
-    /// A sub-agent driven over RPC for one unit of work.
-    SubAgent { work_id: String },
+    /// A sub-agent driven over RPC for one unit of work.  It receives the host variables
+    /// that `secrets` names (exact names or `*` glob patterns), which are its providers'
+    /// variables, besides those the project assigns to it.
+    SubAgent {
+        work_id: String,
+        secrets: Vec<String>,
+    },
     /// A one-off command run inside the sandbox by Clyean itself.
     Maintenance,
 }
@@ -71,7 +79,7 @@ impl LaunchContext {
             LaunchRole::UserAssistant { launch_id, .. } => {
                 format!("clyean-{}-{}-{launch_id}", self.project_id, agent.id())
             }
-            LaunchRole::SubAgent { work_id } => {
+            LaunchRole::SubAgent { work_id, .. } => {
                 let short: String = work_id
                     .chars()
                     .filter(|c| c.is_ascii_alphanumeric())
@@ -107,10 +115,53 @@ impl LaunchContext {
         (mounts, vec![paths.container_root_mask()])
     }
 
+    /// Empty file systems over every agent's profile and over `~/.omp/agent`, which no
+    /// profile reads, with `agent`'s own profile mounted back from the root file system, so
+    /// each container exposes one login store.  Maintenance containers get no profile.
+    fn profile_isolation(
+        &self,
+        agent: AgentId,
+        role: &LaunchRole,
+    ) -> (Vec<MountSpec>, Vec<String>) {
+        let user = self.user.name();
+        let masks = vec![
+            format!("/home/{user}/.omp/profiles"),
+            format!("/home/{user}/.omp/agent"),
+        ];
+        if matches!(role, LaunchRole::Maintenance) {
+            return (Vec::new(), masks);
+        }
+        let own_profile = MountSpec::read_write(
+            host_profile_root(&self.layout.container_root_dir(), user, agent),
+            container_profile_root(user, agent),
+        );
+        (vec![own_profile], masks)
+    }
+
+    /// The names and patterns of the host variables `agent` receives in `role`: the User
+    /// Assistant gets the built-in provider patterns and the project's entries written as
+    /// names; a sub-agent gets its providers' variables and the project's entries that name
+    /// it; maintenance containers get none.
+    pub fn secret_patterns<'a>(&'a self, agent: AgentId, role: &'a LaunchRole) -> Vec<&'a str> {
+        let is_user_assistant = matches!(role, LaunchRole::UserAssistant { .. });
+        let mut patterns: Vec<&str> = match role {
+            LaunchRole::UserAssistant { .. } => BUILTIN_PASSTHROUGH_PATTERNS.to_vec(),
+            LaunchRole::SubAgent { secrets, .. } => secrets.iter().map(String::as_str).collect(),
+            LaunchRole::Maintenance => return Vec::new(),
+        };
+        patterns.extend(
+            self.config
+                .sandbox
+                .passthrough_env
+                .iter()
+                .filter(|entry| entry.reaches(agent.id(), is_user_assistant))
+                .map(|entry| entry.pattern()),
+        );
+        patterns
+    }
+
     fn shared_environment(&self, agent: AgentId, paths: &ContainerPaths) -> Vec<(String, String)> {
-        let mut env =
-            passthrough_environment(std::env::vars(), &self.config.sandbox.passthrough_env);
-        env.extend(vec![
+        let mut env = vec![
             ("CLYEAN_AGENT".to_string(), agent.id().to_string()),
             ("CLYEAN_VERSION".to_string(), self.clyean_version.clone()),
             (
@@ -135,7 +186,7 @@ impl LaunchContext {
             ("HOME".to_string(), self.user.home()),
             ("OMP_PROFILE".to_string(), agent.id().to_string()),
             ("LANG".to_string(), "C.UTF-8".to_string()),
-        ]);
+        ];
         env.extend(
             agent
                 .git_identity()
@@ -155,7 +206,13 @@ impl LaunchContext {
         harness_args: Vec<String>,
     ) -> AgentContainerSpec {
         let paths = self.container_paths();
-        let (mounts, tmpfs_mounts) = self.shared_mounts(&paths);
+        let (mut mounts, mut tmpfs_mounts) = self.shared_mounts(&paths);
+        let (profile_mounts, profile_masks) = self.profile_isolation(agent, &role);
+        mounts.extend(profile_mounts);
+        tmpfs_mounts.extend(profile_masks);
+        let mut environment =
+            select_host_variables(std::env::vars(), &self.secret_patterns(agent, &role));
+        environment.extend(self.shared_environment(agent, &paths));
         let mut command = vec![HARNESS_CONTAINER_PATH.to_string()];
         command.extend(harness_args);
         let mut spec = AgentContainerSpec {
@@ -166,7 +223,7 @@ impl LaunchContext {
             labels: Vec::new(),
             mounts,
             tmpfs_mounts,
-            environment: self.shared_environment(agent, &paths),
+            environment,
             tty: false,
             remove_on_exit: true,
             extra_run_args: self.config.sandbox.podman_run_args.clone(),
@@ -177,9 +234,13 @@ impl LaunchContext {
                 launch_id,
                 bridge_binary,
             } => self.add_user_assistant_parts(&mut spec, &launch_id, bridge_binary),
-            LaunchRole::SubAgent { work_id } => {
+            LaunchRole::SubAgent { work_id, .. } => {
                 spec.environment
                     .push(("CLYEAN_WORK_ID".to_string(), work_id));
+                spec.environment.push((
+                    "CLYEAN_CREDENTIALS_BUNDLE".to_string(),
+                    container_credentials_bundle_path(self.user.name(), agent),
+                ));
                 spec.tmpfs_mounts
                     .extend(container_daemon_dirs(self.user.name(), agent));
             }
@@ -322,9 +383,10 @@ impl CommandRunner for SandboxRunner {
     }
 }
 
-/// Host variables that reach every agent container so provider credentials configured on
-/// the host work inside the sandbox: any `*_API_KEY`, plus the cloud and endpoint
-/// variables the harness's providers read.
+/// Host variables that reach the User Assistant's container so provider credentials
+/// configured on the host work inside the sandbox: any `*_API_KEY`, plus the cloud and
+/// endpoint variables the harness's providers read.  The harness's auth broker variables
+/// are deliberately absent, because a broker hands every client every credential it holds.
 pub const BUILTIN_PASSTHROUGH_PATTERNS: &[&str] = &[
     "*_API_KEY",
     "*_API_TOKEN",
@@ -341,26 +403,17 @@ pub const BUILTIN_PASSTHROUGH_PATTERNS: &[&str] = &[
     "GOOGLE_APPLICATION_CREDENTIALS",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
-    "OMP_AUTH_BROKER_URL",
-    "OMP_AUTH_BROKER_TOKEN",
 ];
 
-/// Selects the host variables to pass through: those matching a built-in pattern or one of
-/// the project's extra names or `*` glob patterns.
-pub fn passthrough_environment(
+/// The host variables whose names match one of `patterns` (exact names, or `*` glob
+/// patterns with a leading or trailing `*`), sorted by name.
+pub fn select_host_variables(
     host: impl IntoIterator<Item = (String, String)>,
-    extra_patterns: &[String],
+    patterns: &[&str],
 ) -> Vec<(String, String)> {
     let mut selected: Vec<(String, String)> = host
         .into_iter()
-        .filter(|(name, _)| {
-            BUILTIN_PASSTHROUGH_PATTERNS
-                .iter()
-                .any(|pattern| glob_matches(pattern, name))
-                || extra_patterns
-                    .iter()
-                    .any(|pattern| glob_matches(pattern, name))
-        })
+        .filter(|(name, _)| patterns.iter().any(|pattern| glob_matches(pattern, name)))
         .collect();
     selected.sort();
     selected
@@ -385,15 +438,11 @@ pub fn cache_dir() -> PathBuf {
     std::env::temp_dir().join("clyean-cache")
 }
 
-#[allow(dead_code)]
-fn is_dir(path: &Path) -> bool {
-    path.is_dir()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clyean_project::{ProjectType, SandboxConfig};
+    use std::path::Path;
 
     fn context(dir: &Path) -> LaunchContext {
         let project = dir.join("workspace").join("proj");
@@ -540,28 +589,106 @@ mod tests {
     }
 
     #[test]
-    fn provider_credentials_and_configured_names_pass_through() {
+    fn host_variables_are_selected_by_exact_names_and_globs() {
         let host = vec![
             ("ANTHROPIC_API_KEY".to_string(), "k1".to_string()),
             ("OPENAI_BASE_URL".to_string(), "https://proxy".to_string()),
-            ("AWS_SECRET_ACCESS_KEY".to_string(), "s".to_string()),
             ("HOME".to_string(), "/home/x".to_string()),
             ("MY_PRIVATE_TOKEN".to_string(), "t".to_string()),
             ("CUSTOM_THING".to_string(), "c".to_string()),
         ];
-        let selected =
-            passthrough_environment(host, &["CUSTOM_THING".to_string(), "MY_*".to_string()]);
+        let selected = select_host_variables(host, &["*_API_KEY", "CUSTOM_THING", "MY_*"]);
         let names: Vec<&str> = selected.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
             names,
-            vec![
-                "ANTHROPIC_API_KEY",
-                "AWS_SECRET_ACCESS_KEY",
-                "CUSTOM_THING",
-                "MY_PRIVATE_TOKEN",
-                "OPENAI_BASE_URL"
-            ]
+            vec!["ANTHROPIC_API_KEY", "CUSTOM_THING", "MY_PRIVATE_TOKEN"]
         );
+    }
+
+    #[test]
+    fn host_secrets_reach_only_the_agents_that_need_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = context(dir.path());
+        context.config.sandbox.passthrough_env = serde_json::from_str(
+            r#"["CORP_PROXY_TOKEN", {"name": "GH_TOKEN", "agents": ["software-engineering-director"]}]"#,
+        )
+        .unwrap();
+        let user_assistant = user_assistant_role("/b");
+        let patterns = context.secret_patterns(AgentId::UserAssistant, &user_assistant);
+        assert!(patterns.contains(&"*_API_KEY"));
+        assert!(patterns.contains(&"CORP_PROXY_TOKEN"));
+        assert!(!patterns.contains(&"GH_TOKEN"));
+        assert!(!patterns.iter().any(|p| p.starts_with("OMP_AUTH_BROKER")));
+
+        let director = LaunchRole::SubAgent {
+            work_id: "w".into(),
+            secrets: vec!["OPENAI_API_KEY".into()],
+        };
+        assert_eq!(
+            context.secret_patterns(AgentId::SoftwareEngineeringDirector, &director),
+            ["OPENAI_API_KEY", "GH_TOKEN"]
+        );
+        let programmer = LaunchRole::SubAgent {
+            work_id: "w".into(),
+            secrets: Vec::new(),
+        };
+        assert!(context
+            .secret_patterns(AgentId::Programmer, &programmer)
+            .is_empty());
+        assert!(context
+            .secret_patterns(AgentId::SoftwareArchitect, &LaunchRole::Maintenance)
+            .is_empty());
+    }
+
+    #[test]
+    fn every_container_exposes_at_most_its_own_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = context(dir.path());
+        let root = context.layout.container_root_dir();
+        let masks = [
+            "/home/skyei/.omp/profiles".to_string(),
+            "/home/skyei/.omp/agent".to_string(),
+        ];
+        let cases = [
+            (AgentId::UserAssistant, user_assistant_role("/b")),
+            (
+                AgentId::Programmer,
+                LaunchRole::SubAgent {
+                    work_id: "w".into(),
+                    secrets: Vec::new(),
+                },
+            ),
+        ];
+        for (agent, role) in cases {
+            let spec = context.agent_container_spec(agent, role, Vec::new());
+            for mask in &masks {
+                assert!(spec.tmpfs_mounts.contains(mask), "{agent:?} masks {mask}");
+            }
+            let profiles: Vec<&MountSpec> = spec
+                .mounts
+                .iter()
+                .filter(|m| m.target.starts_with("/home/skyei/.omp"))
+                .collect();
+            assert_eq!(
+                profiles,
+                [&MountSpec::read_write(
+                    root.join(format!("home/skyei/.omp/profiles/{}", agent.id())),
+                    format!("/home/skyei/.omp/profiles/{}", agent.id()),
+                )]
+            );
+        }
+        let maintenance = context.agent_container_spec(
+            AgentId::SoftwareArchitect,
+            LaunchRole::Maintenance,
+            Vec::new(),
+        );
+        for mask in &masks {
+            assert!(maintenance.tmpfs_mounts.contains(mask));
+        }
+        assert!(!maintenance
+            .mounts
+            .iter()
+            .any(|m| m.target.starts_with("/home/skyei/.omp")));
     }
 
     #[test]
@@ -571,6 +698,7 @@ mod tests {
         let args = context.sub_agent_harness_args(AgentId::Programmer, Some("/sessions/x.jsonl"));
         let role = LaunchRole::SubAgent {
             work_id: "0192a-work".into(),
+            secrets: Vec::new(),
         };
         let spec = context.agent_container_spec(AgentId::Programmer, role, args);
         assert!(!spec.tty);
@@ -582,6 +710,8 @@ mod tests {
             .contains(&"/home/skyei/.omp/profiles/programmer/run".to_string()));
         let run = spec.run_args();
         assert!(run.iter().any(|a| a == "CLYEAN_WORK_ID=0192a-work"));
+        assert!(run.iter().any(|a| a
+            == "CLYEAN_CREDENTIALS_BUNDLE=/home/skyei/.omp/profiles/programmer/agent/clyean-credentials.json"));
         assert!(!run.iter().any(|a| a.starts_with("HERDR_")));
         assert!(!run
             .iter()

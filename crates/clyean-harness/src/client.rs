@@ -15,6 +15,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::frames::{FrameDecoder, RpcFrame};
+use crate::session::BoxFuture;
 use crate::{HarnessError, Result};
 
 const EVENT_CHANNEL_CAPACITY: usize = 4096;
@@ -33,9 +34,18 @@ pub enum HarnessEvent {
 pub struct HarnessOutput(pub String);
 
 type PendingResponses = Arc<Mutex<HashMap<String, oneshot::Sender<RpcFrame>>>>;
+type SharedStdin = Arc<Mutex<Option<ChildStdin>>>;
+
+/// Answers extension UI requests (`extension_ui_request` frames) of a harness in RPC mode.
+/// The answer carries the response's payload fields (`value`, `confirmed`, or
+/// `cancelled`); the client adds the frame type and the request's `id`.  A request the
+/// handler declines stays unanswered, and the harness's own timeout settles it.
+pub trait UiRequestHandler: Send + Sync {
+    fn answer<'a>(&'a self, request: &'a RpcFrame) -> BoxFuture<'a, Option<Value>>;
+}
 
 pub struct HarnessClient {
-    stdin: Mutex<Option<ChildStdin>>,
+    stdin: SharedStdin,
     child: Mutex<Option<Child>>,
     pending: PendingResponses,
     events: broadcast::Sender<HarnessEvent>,
@@ -46,7 +56,16 @@ pub struct HarnessClient {
 impl HarnessClient {
     /// Spawns `command` with piped stdio, waits for the ready frame, and upgrades to
     /// protocol v2 when the harness advertises it.
-    pub async fn spawn(mut command: Command, ready_timeout: Duration) -> Result<Self> {
+    pub async fn spawn(command: Command, ready_timeout: Duration) -> Result<Self> {
+        Self::spawn_with_ui_handler(command, ready_timeout, None).await
+    }
+
+    /// Like [`HarnessClient::spawn`], answering extension UI requests with `ui_handler`.
+    pub async fn spawn_with_ui_handler(
+        mut command: Command,
+        ready_timeout: Duration,
+        ui_handler: Option<Arc<dyn UiRequestHandler>>,
+    ) -> Result<Self> {
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -61,12 +80,18 @@ impl HarnessClient {
 
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
+        let stdin: SharedStdin = Arc::new(Mutex::new(Some(stdin)));
         let (ready_tx, ready_rx) = oneshot::channel();
+        let answering = ui_handler.map(|handler| UiAnswering {
+            handler,
+            stdin: stdin.clone(),
+        });
         tokio::spawn(read_frames(
             stdout,
             pending.clone(),
             events.clone(),
             ready_tx,
+            answering,
         ));
 
         let ready = match tokio::time::timeout(ready_timeout, ready_rx).await {
@@ -96,7 +121,7 @@ impl HarnessClient {
             .is_some_and(|versions| versions.iter().any(|v| v.as_u64() == Some(2)));
 
         let client = Self {
-            stdin: Mutex::new(Some(stdin)),
+            stdin,
             child: Mutex::new(Some(child)),
             pending,
             events,
@@ -130,14 +155,7 @@ impl HarnessClient {
         let object = params.as_object_mut().expect("params must be an object");
         object.insert("id".into(), Value::String(id.clone()));
         object.insert("type".into(), Value::String(command_type.into()));
-        let mut line = serde_json::to_string(&params).expect("serializable");
-        line.push('\n');
-        {
-            let mut stdin_slot = self.stdin.lock().await;
-            let stdin = stdin_slot.as_mut().ok_or(HarnessError::OutputClosed)?;
-            stdin.write_all(line.as_bytes()).await?;
-            stdin.flush().await?;
-        }
+        write_frame(&self.stdin, &params).await?;
         let response = rx.await.map_err(|_| HarnessError::OutputClosed)?;
         if response.0.get("success").and_then(Value::as_bool) == Some(false) {
             let message = response
@@ -168,6 +186,45 @@ impl HarnessClient {
     }
 }
 
+async fn write_frame(stdin: &SharedStdin, frame: &Value) -> Result<()> {
+    let mut line = serde_json::to_string(frame).expect("serializable");
+    line.push('\n');
+    let mut stdin_slot = stdin.lock().await;
+    let stdin = stdin_slot.as_mut().ok_or(HarnessError::OutputClosed)?;
+    stdin.write_all(line.as_bytes()).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct UiAnswering {
+    handler: Arc<dyn UiRequestHandler>,
+    stdin: SharedStdin,
+}
+
+impl UiAnswering {
+    /// Answers `request` in the background, so a slow answer never holds up other frames.
+    fn spawn(&self, request: RpcFrame) {
+        let answering = self.clone();
+        tokio::spawn(async move {
+            let Some(id) = request.id().map(str::to_string) else {
+                return;
+            };
+            let Some(mut answer) = answering.handler.answer(&request).await else {
+                return;
+            };
+            let Some(fields) = answer.as_object_mut() else {
+                return;
+            };
+            fields.insert("type".into(), Value::String("extension_ui_response".into()));
+            fields.insert("id".into(), Value::String(id));
+            if let Err(error) = write_frame(&answering.stdin, &answer).await {
+                tracing::debug!(target: "clyean::harness", %error, "could not answer a UI request");
+            }
+        });
+    }
+}
+
 async fn forward_stderr(stderr: tokio::process::ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -185,6 +242,7 @@ async fn read_frames(
     pending: PendingResponses,
     events: broadcast::Sender<HarnessEvent>,
     ready_tx: oneshot::Sender<RpcFrame>,
+    answering: Option<UiAnswering>,
 ) {
     let mut decoder = FrameDecoder::new(DEFAULT_MAX_REASSEMBLED_BYTES);
     let mut lines = BufReader::new(stdout).lines();
@@ -203,6 +261,11 @@ async fn read_frames(
                 let _ = tx.send(frame);
             }
             continue;
+        }
+        if frame.kind() == "extension_ui_request" {
+            if let Some(answering) = &answering {
+                answering.spawn(frame.clone());
+            }
         }
         if frame.kind() == "response" {
             if let Some(id) = frame.id() {

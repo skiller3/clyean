@@ -6,11 +6,13 @@
 
 pub mod extensions;
 pub mod instructions;
+pub mod needs;
 pub mod profile;
 pub mod roster;
 pub mod settings;
 
 pub use extensions::managed_extensions;
+pub use needs::AgentNeeds;
 pub use profile::{ManagedExtension, ProfileProjection};
 pub use roster::{AgentId, AgentStatus};
 

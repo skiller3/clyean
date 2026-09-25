@@ -4,7 +4,7 @@ The User Assistant agent runs inside a Podman container while Clyean's orchestra
 
 ## Transport
 
-Newline-delimited JSON.  The client (the `clyean-orchestration` harness extension) opens one connection per request, writes exactly one request object followed by `\n`, and then reads response and event objects, one per line, until the connection is closed by the server or a terminal event arrives.  The server never handles more than one request per connection.
+Newline-delimited JSON.  The client (the `clyean-orchestration` harness extension) opens one connection per request, writes exactly one request object followed by `\n`, and then reads response and event objects, one per line, until the connection is closed by the server or a terminal event arrives.  The server never handles more than one request per connection.  The lease is the one exception: after it is granted, the orchestrator sends its own requests on it (see "Credential requests on the lease").
 
 Every request carries a client-chosen `id` string and a `method`.  Every response echoes the `id`.
 
@@ -19,18 +19,35 @@ Errors replace `result` with `error`:
 {"id":"req-1","error":{"code":"unknown_method","message":"unknown method: nope"}}
 ```
 
-Error codes are `invalid_request`, `unknown_method`, `project_locked`, `not_scaffolded`, `work_not_found`, `request_not_found`, `work_failed`, and `internal`.
+Error codes are `invalid_request`, `unknown_method`, `project_locked`, `not_scaffolded`, `work_not_found`, `request_not_found`, `work_failed`, `credentials_unavailable`, and `internal`.  `credentials_unavailable` reaches a client as the code of a `failed` event, when a sub-agent cannot be given the credentials its model needs.
 
 ## Methods
 
 ### `session.lease`
 
-Held once by the User Assistant for the life of its harness process.  The server answers `{"type":"lease"}` and then keeps the connection open, ignoring anything the client writes, until the client closes it.  The connection ends from the host side only when the bridge does, which happens exactly when the `clyean` process that started the container is gone, so the client shuts the harness down when it ends.
+Held once by the User Assistant for the life of its harness process.  The server answers `{"type":"lease"}` and then keeps the connection open until the client closes it, sending its credential requests on it.  The connection ends from the host side only when the bridge does, which happens exactly when the `clyean` process that started the container is gone, so the client shuts the harness down when it ends.
 
 ```json
 {"id":"lease:42","method":"session.lease","params":{}}
 {"id":"lease:42","result":{"type":"lease"}}
 ```
+
+#### Credential requests on the lease
+
+Once the lease is granted, the orchestrator writes requests on the lease connection and the User Assistant answers each with the request's `id`, in any order, with a `result` or an `error` (code `not_ready` before the User Assistant's session starts, otherwise `credentials`).  Requests are the orchestrator's alone; the User Assistant sends none.
+
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `credentials.resolve` | `patterns`: model patterns from a sub-agent's configuration | `models`: each pattern mapped to `{"provider", "model"}` or `null` when it names nothing known, where `model` is a `--model` selector, or `null` for a pattern that names a provider rather than a model; `current`: the User Assistant's current model in the same form, or `null` |
+| `credentials.variables` | `providers` | `variables`: each provider mapped to the environment variable names the harness reads for it |
+| `credentials.copies` | `agent`, `providers`, `mcp_servers` | `providers`: copies of the stored credentials per provider; `mcp`: copies of MCP server credentials keyed by the receiving agent's credential identifier; `unavailable`: the requested providers the User Assistant has no credential for |
+
+```json
+{"id":"credentials-3","method":"credentials.copies","params":{"agent":"programmer","providers":["anthropic"],"mcp_servers":[]}}
+{"id":"credentials-3","result":{"type":"credential_copies","providers":{"anthropic":[{"type":"oauth","access":"…","refresh":"","expires":1790000000000}]},"mcp":{},"unavailable":[]}}
+```
+
+Copies never carry refresh tokens or client secrets; see [the sandbox contract](sandbox-contract.md#credentials) for how sub-agents receive and renew them.
 
 ### `ping`
 

@@ -1,10 +1,11 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! User Assistant containers under real Podman: the bridge over a `podman exec` session,
-//! the container ending with its bridge, private sockets over one shared root filesystem,
-//! and the orphan backstop.  The container's "harness" here is `clyean-bridge connect`,
-//! which, like the harness's lease, ends when the orchestrator connection ends.
+//! Agent containers under real Podman: the User Assistant's bridge over a `podman exec`
+//! session, the container ending with its bridge, private sockets and private login stores
+//! over one shared root filesystem, and the orphan backstop.  The User Assistant's
+//! "harness" here is `clyean-bridge connect`, which, like the harness's lease, ends when
+//! the orchestrator connection ends.
 //!
 //! These tests run only when `CLYEAN_PODMAN_TESTS=1` and `CLYEAN_BRIDGE_BINARY` names a
 //! static Linux build of `clyean-bridge`.  `CLYEAN_TEST_IMAGE` overrides the small image
@@ -65,6 +66,9 @@ impl Fixture {
         let root = layout.container_root_dir();
         populate_from_image(&podman, &image, &root).unwrap();
         install_fake_harness(&root);
+        // Profile projection creates every agent's profile before any container starts.
+        std::fs::create_dir_all(root.join("home/clyean-test/.omp/profiles/user-assistant/agent"))
+            .unwrap();
         let config = ProjectConfig::new(
             "0.1.0",
             ProjectType::SoftwareEngineeringProject,
@@ -289,6 +293,59 @@ async fn launches_share_the_root_filesystem_but_not_their_sockets() {
     let _second_bridge = fixture.open_bridge(&second, "second").await;
     assert_eq!(first.exchange("hello").await, "first:hello");
     assert_eq!(second.exchange("hello").await, "second:hello");
+}
+
+#[tokio::test]
+async fn an_agent_container_exposes_only_the_agents_own_profile() {
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let root = fixture.context.layout.container_root_dir();
+    let omp = root.join("home/clyean-test/.omp");
+    for agent in ["user-assistant", "programmer"] {
+        let profile = omp.join("profiles").join(agent).join("agent");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("agent.db"), format!("store of {agent}")).unwrap();
+    }
+    std::fs::create_dir_all(omp.join("agent")).unwrap();
+    std::fs::write(omp.join("agent/agent.db"), "unused store").unwrap();
+
+    let role = LaunchRole::SubAgent {
+        work_id: "work-1".into(),
+        secrets: Vec::new(),
+    };
+    let mut spec = fixture
+        .context
+        .agent_container_spec(AgentId::Programmer, role, Vec::new());
+    spec.name = format!("{}-{}", spec.name, LaunchId::generate());
+    let (key, value) = fixture.label.split_once('=').unwrap();
+    spec.labels.push((key.to_string(), value.to_string()));
+    spec.command = [
+        "/bin/sh",
+        "-c",
+        "cd /home/clyean-test/.omp && ls profiles && cat profiles/programmer/agent/agent.db && echo && ls agent | wc -l && echo written > profiles/programmer/agent/from-container",
+    ]
+    .map(String::from)
+    .to_vec();
+    let output = Command::new(fixture.podman.binary())
+        .args(spec.run_args())
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    assert_eq!(lines, ["programmer", "store of programmer", "0"]);
+    assert_eq!(
+        std::fs::read_to_string(omp.join("profiles/programmer/agent/from-container")).unwrap(),
+        "written\n",
+        "the agent's writes reach its profile in the root filesystem"
+    );
 }
 
 #[tokio::test]

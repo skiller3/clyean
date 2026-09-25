@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
 //! The connection handling of the orchestrator protocol: one request per connection, an
-//! immediate response, then streamed events until a closing event.  Connections arrive
-//! through the bridge of the User Assistant's container, so any byte stream serves.
+//! immediate response, then streamed events until a closing event.  The lease is the
+//! exception: it stays open for the User Assistant's life and carries the orchestrator's
+//! credential requests.  Connections arrive through the bridge of the User Assistant's
+//! container, so any byte stream serves.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +18,8 @@ use crate::protocol::{Request, Response, StreamedEvent};
 use crate::service::{Dispatch, OrchestratorService};
 
 /// The method a User Assistant calls once and keeps open for its whole life; the
-/// connection ending tells it that its `clyean` process is gone.
+/// connection ending tells it that its `clyean` process is gone.  The orchestrator sends
+/// its credential requests on this connection.
 pub const LEASE_METHOD: &str = "session.lease";
 
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,8 +52,7 @@ where
     if request.method == LEASE_METHOD {
         let response = Response::result(&request.id, json!({"type": "lease"}));
         write_json(&mut writer, &response).await?;
-        while let Ok(Some(_)) = lines.next_line().await {}
-        return Ok(());
+        return service.credential_authority().serve(lines, writer).await;
     }
     let Dispatch { response, stream } = service.dispatch(request).await;
     write_json(&mut writer, &response).await?;

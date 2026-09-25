@@ -85,17 +85,36 @@ pub struct SandboxConfig {
     /// Overrides where the harness binary is taken from; `None` selects the release download.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_binary: Option<PathBuf>,
-    /// Host environment variables passed into every agent container, in addition to the
-    /// built-in provider credential patterns.  Exact names or `*` glob patterns.
+    /// Host environment variables passed into agent containers, beyond each agent's
+    /// provider credentials.  Exact names or `*` glob patterns.
     #[serde(default)]
-    pub passthrough_env: Vec<String>,
-    /// Whether sub-agents start with a copy of the User Assistant's credential store.
-    #[serde(default = "default_true")]
-    pub inherit_credentials: bool,
+    pub passthrough_env: Vec<PassthroughEntry>,
 }
 
-fn default_true() -> bool {
-    true
+/// One host environment variable, or `*` glob pattern, that the project passes through:
+/// written as a string, it reaches the User Assistant only; written as an object, it
+/// reaches the agents it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PassthroughEntry {
+    UserAssistant(String),
+    Assigned { name: String, agents: Vec<String> },
+}
+
+impl PassthroughEntry {
+    /// Whether the variable or pattern reaches the agent `agent_id`.
+    pub fn reaches(&self, agent_id: &str, is_user_assistant: bool) -> bool {
+        match self {
+            Self::UserAssistant(_) => is_user_assistant,
+            Self::Assigned { agents, .. } => agents.iter().any(|agent| agent == agent_id),
+        }
+    }
+
+    pub fn pattern(&self) -> &str {
+        match self {
+            Self::UserAssistant(name) | Self::Assigned { name, .. } => name,
+        }
+    }
 }
 
 impl SandboxConfig {
@@ -106,7 +125,6 @@ impl SandboxConfig {
             podman_run_args: Vec::new(),
             harness_binary: None,
             passthrough_env: Vec::new(),
-            inherit_credentials: true,
         }
     }
 }
@@ -209,10 +227,23 @@ mod tests {
         assert_eq!(loaded.sandbox.image, "docker.io/library/debian:12");
         assert_eq!(loaded.sandbox.mounts, vec![PathBuf::from("/data")]);
         assert_eq!(loaded.project_type, ProjectType::SoftwareEngineeringProject);
-        assert!(
-            loaded.sandbox.inherit_credentials,
-            "defaults survive a partial override"
-        );
+    }
+
+    #[test]
+    fn passthrough_entries_are_names_for_the_user_assistant_or_assigned_objects() {
+        let sandbox: SandboxConfig = serde_json::from_str(
+            r#"{"image": "i", "passthroughEnv": ["CORP_*", {"name": "GH_TOKEN", "agents": ["software-engineering-director"]}]}"#,
+        )
+        .unwrap();
+        let [corp, token] = sandbox.passthrough_env.as_slice() else {
+            panic!("two entries")
+        };
+        assert_eq!(corp.pattern(), "CORP_*");
+        assert!(corp.reaches("user-assistant", true));
+        assert!(!corp.reaches("programmer", false));
+        assert_eq!(token.pattern(), "GH_TOKEN");
+        assert!(token.reaches("software-engineering-director", false));
+        assert!(!token.reaches("user-assistant", true));
     }
 
     #[test]

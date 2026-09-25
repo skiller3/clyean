@@ -209,6 +209,10 @@ export interface StubReply {
 export interface StubOrchestrator {
 	socketPath: string;
 	requests: any[];
+	/** Lines the extension wrote after its request, such as answers on the lease. */
+	followUps: any[];
+	/** Writes a line to every open connection, as the orchestrator does on the lease. */
+	send(frame: unknown): void;
 	/** Ends every open connection, as the bridge does when its clyean process dies. */
 	dropConnections(): void;
 	close(): Promise<void>;
@@ -221,6 +225,7 @@ export async function startStubOrchestrator(
 ): Promise<StubOrchestrator> {
 	const socketPath = shortSocketPath(name);
 	const requests: any[] = [];
+	const followUps: any[] = [];
 	const sockets = new Set<Socket>();
 	const server = createServer((socket: Socket) => {
 		sockets.add(socket);
@@ -230,12 +235,19 @@ export async function startStubOrchestrator(
 		socket.setEncoding("utf8");
 		socket.on("error", () => {});
 		socket.on("data", async (chunk: string) => {
-			if (handled) return;
 			input += chunk;
+			if (handled) {
+				for (let newline = input.indexOf("\n"); newline !== -1; newline = input.indexOf("\n")) {
+					followUps.push(JSON.parse(input.slice(0, newline)));
+					input = input.slice(newline + 1);
+				}
+				return;
+			}
 			const newline = input.indexOf("\n");
 			if (newline === -1) return;
 			handled = true;
 			const request = JSON.parse(input.slice(0, newline));
+			input = input.slice(newline + 1);
 			requests.push(request);
 			const reply = await handle(request);
 			if (reply.error) {
@@ -255,6 +267,10 @@ export async function startStubOrchestrator(
 	return {
 		socketPath,
 		requests,
+		followUps,
+		send(frame: unknown) {
+			for (const socket of sockets) socket.write(`${JSON.stringify(frame)}\n`);
+		},
 		dropConnections() {
 			for (const socket of sockets) socket.destroy();
 		},
@@ -287,6 +303,7 @@ const ENVIRONMENT_KEYS = [
 	"CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS",
 	"CLYEAN_ORCHESTRATOR_SILENCE_TIMEOUT_MS",
 	"CLYEAN_ORCHESTRATOR_LEASE",
+	"CLYEAN_CREDENTIALS_BUNDLE",
 ] as const;
 
 /** Snapshot the environment keys the extensions read so each test can start clean and restore afterwards. */

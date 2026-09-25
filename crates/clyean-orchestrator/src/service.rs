@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::agents::{AgentSessionFactory, SubAgentPool};
+use crate::credentials::CredentialAuthority;
 use crate::events::EventSink;
 use crate::journal::{journal_path, list_journals, WorkJournal, WorkKind, WorkStatus};
 use crate::protocol::{
@@ -86,6 +87,7 @@ pub struct StreamAttachment {
 pub struct OrchestratorService {
     state: Mutex<ProjectState>,
     registry: Arc<WorkRegistry>,
+    credentials: Arc<CredentialAuthority>,
     version: String,
 }
 
@@ -94,8 +96,20 @@ impl OrchestratorService {
         Self {
             state: Mutex::new(state),
             registry: Arc::new(WorkRegistry::default()),
+            credentials: Arc::default(),
             version: version.into(),
         }
+    }
+
+    /// Uses `credentials`, which the sub-agent session factory shares, as the authority
+    /// the User Assistant's lease connects.
+    pub fn with_credential_authority(mut self, credentials: Arc<CredentialAuthority>) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    pub fn credential_authority(&self) -> &Arc<CredentialAuthority> {
+        &self.credentials
     }
 
     pub async fn services(&self) -> Result<Arc<ProjectServices>> {

@@ -1,11 +1,12 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
-//! The host-side orchestrator: it serves the User Assistant over a Unix socket, runs the
+//! The host-side orchestrator: it serves the User Assistant through its bridge, runs the
 //! planning, implementation, research, and scaffolding workflows by driving sub-agent
 //! sessions, and journals every unit of work so that it can be resumed.
 
 pub mod agents;
+pub mod credentials;
 pub mod events;
 pub mod journal;
 pub mod prompts;
@@ -18,6 +19,7 @@ pub mod work;
 pub mod workflows;
 
 pub use agents::{AgentSessionFactory, SubAgentPool};
+pub use credentials::CredentialAuthority;
 pub use journal::{Phase, WorkJournal, WorkKind, WorkStatus};
 pub use protocol::{PromptType, Request, Response, StreamedEvent};
 pub use service::{OrchestratorService, ProjectServices};
@@ -63,6 +65,8 @@ pub enum OrchestratorError {
     AgentTurnFailed { agent: String, message: String },
     #[error("{0}")]
     Workflow(String),
+    #[error("{0}")]
+    Credentials(String),
 }
 
 impl OrchestratorError {
@@ -81,6 +85,7 @@ impl OrchestratorError {
             Self::WorkNotFound(_) => "work_not_found",
             Self::RequestNotFound { .. } => "request_not_found",
             Self::Cancelled => "cancelled",
+            Self::Credentials(_) => "credentials_unavailable",
             _ => "internal",
         }
     }

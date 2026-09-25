@@ -136,6 +136,44 @@ async fn a_lease_stays_open_until_the_user_assistant_closes_it() {
 }
 
 #[tokio::test]
+async fn the_lease_carries_the_orchestrators_credential_requests() {
+    let fixture = scaffolded_fixture().await;
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server);
+    let service = fixture.service.clone();
+    let task =
+        tokio::spawn(async move { handle_connection(service, server_read, server_write).await });
+    let (client_read, mut client_write) = tokio::io::split(client);
+    client_write
+        .write_all(b"{\"id\":\"lease-1\",\"method\":\"session.lease\",\"params\":{}}\n")
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(client_read).lines();
+    lines.next_line().await.unwrap().unwrap();
+    let authority = fixture.service.credential_authority().clone();
+    for _ in 0..100 {
+        if authority.is_connected() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let asking = tokio::spawn(async move { authority.variables(&["openai".into()]).await });
+    let request: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(request["method"], "credentials.variables");
+    assert_eq!(request["params"], json!({"providers": ["openai"]}));
+    let answer = json!({"id": request["id"], "result": {"type": "credential_variables", "variables": {"openai": ["OPENAI_API_KEY"]}}});
+    client_write
+        .write_all(format!("{answer}\n").as_bytes())
+        .await
+        .unwrap();
+    let variables = asking.await.unwrap().unwrap();
+    assert_eq!(variables["openai"], ["OPENAI_API_KEY"]);
+    client_write.shutdown().await.unwrap();
+    task.await.unwrap().unwrap();
+    assert!(!fixture.service.credential_authority().is_connected());
+}
+
+#[tokio::test]
 async fn planning_asks_the_user_then_authors_and_reviews_every_section() {
     let fixture = scaffolded_fixture().await;
     let layout = fixture.layout.clone();

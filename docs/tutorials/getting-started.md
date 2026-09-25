@@ -38,7 +38,7 @@ Clyean then:
 4. Projects each agent's profile into the sandbox and starts the orchestrator inside the `clyean` process.
 5. Starts this invocation's own User Assistant container, connects your terminal to it, and opens the bridge that links the container to the orchestrator.  You are now talking to the User Assistant inside the sandbox; the welcome box reads `clyean v<harness version>` and credits the Oh-My-Pi harness.
 
-The harness needs a model provider.  Either export the provider's variable (for example `ANTHROPIC_API_KEY`) before running `clyean`, which passes it into every agent container, or use `/login` in the User Assistant; by default the other agents inherit the User Assistant's credentials when they start.  [Configure agents](../how-to/configure-agents.md) has the details.
+The harness needs a model provider.  Either export the provider's variable (for example `ANTHROPIC_API_KEY`) before running `clyean`, or use `/login` in the User Assistant.  Either way, the other agents receive what they need for their models when they start.  [Configure agents](../how-to/configure-agents.md) has the details.
 
 ## 3. Let the User Assistant scaffold
 
