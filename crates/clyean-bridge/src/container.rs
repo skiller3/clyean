@@ -2,21 +2,35 @@
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
 //! The container end of the bridge.  It listens on one Unix socket per channel and turns
-//! each accepted connection into a stream to the host.  Two threads serve every stream:
-//! one reads the connection while it holds credit, the other writes what the host sends,
-//! so a slow connection never stalls the others.  When its input ends, which happens as
-//! soon as the host process dies, the bridge returns and its process exits, closing every
-//! connection it served.
+//! each accepted connection into a stream to the host, and it connects each stream the
+//! host opens on a `relay:<protocol>:<port>` channel to that port on the container's
+//! loopback.  Two threads serve every stream: one reads the connection while it holds
+//! credit, the other writes what the host sends, so a slow connection never stalls the
+//! others.  When its input ends, which happens as soon as the host process dies, the
+//! bridge returns and its process exits, closing every connection it served.
 
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
-use std::net::Shutdown;
+use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpStream, UdpSocket};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
 
-use crate::protocol::{Frame, MAX_DATA, MAX_STREAMS, STREAM_WINDOW};
+use crate::protocol::{
+    is_bridge_stream, Frame, Message, MessageReader, Peer, RelayProtocol, RelayTarget, MAX_DATA,
+    MAX_HOST_STREAMS, MAX_STREAMS, STREAM_WINDOW,
+};
+
+#[cfg(target_os = "linux")]
+use crate::sctp;
+
+/// How long connecting to a relay's port on the container's loopback may take.
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How often a thread waiting on a datagram socket checks whether its stream is gone.
+const DATAGRAM_POLL: Duration = Duration::from_millis(500);
 
 /// A named channel and the socket that serves it inside the container.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,13 +141,75 @@ struct Inner {
 struct Stream {
     inbound: Mutex<Option<mpsc::Sender<Inbound>>>,
     credit: Credit,
-    socket: UnixStream,
+    /// The connection the stream carries, once it is connected.
+    endpoint: Mutex<Option<Endpoint>>,
     open_directions: AtomicU8,
+    host_opened: bool,
+}
+
+impl Stream {
+    fn new(inbound: mpsc::Sender<Inbound>, endpoint: Option<Endpoint>, host_opened: bool) -> Self {
+        Self {
+            inbound: Mutex::new(Some(inbound)),
+            credit: Credit::new(STREAM_WINDOW as usize),
+            endpoint: Mutex::new(endpoint),
+            open_directions: AtomicU8::new(2),
+            host_opened,
+        }
+    }
+
+    fn set_endpoint(&self, endpoint: Endpoint) {
+        *self.endpoint.lock().expect("stream endpoint lock") = Some(endpoint);
+    }
+}
+
+/// What one stream is connected to inside the container.
+enum Endpoint {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+    Udp,
+    #[cfg(target_os = "linux")]
+    Sctp(Arc<sctp::Association>),
+}
+
+impl Endpoint {
+    /// Unblocks the stream's threads.  A datagram socket has nothing to shut down: its
+    /// reader notices the stream is gone within [`DATAGRAM_POLL`].
+    fn shutdown(&self) {
+        match self {
+            Self::Unix(socket) => {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+            Self::Tcp(socket) => {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+            Self::Udp => {}
+            #[cfg(target_os = "linux")]
+            Self::Sctp(association) => association.shutdown(),
+        }
+    }
 }
 
 enum Inbound {
     Data(Vec<u8>),
     Shutdown,
+}
+
+/// A connection whose writing half can be closed on its own.
+trait HalfClose {
+    fn close_write(&self);
+}
+
+impl HalfClose for UnixStream {
+    fn close_write(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+impl HalfClose for TcpStream {
+    fn close_write(&self) {
+        let _ = self.shutdown(Shutdown::Write);
+    }
 }
 
 impl Bridge {
@@ -178,7 +254,9 @@ impl Bridge {
                     }
                 }
                 Frame::Close { stream } => self.abort(stream, false),
-                // Streams the host opens are reserved for a later protocol version.
+                Frame::Open {
+                    stream, channel, ..
+                } if !is_bridge_stream(stream) => self.open_relay(stream, &channel),
                 Frame::Open { stream, .. } => self.send(&Frame::Close { stream })?,
                 Frame::Hello { .. } => {}
             }
@@ -186,49 +264,144 @@ impl Bridge {
         Ok(())
     }
 
+    /// Registers a stream, allocating the next bridge id for a bridge-opened one, and
+    /// refuses it when the bridge already holds as many streams as it may.
+    fn register(&self, entry: Arc<Stream>, host_id: Option<u32>) -> Option<u32> {
+        let mut streams = self.inner.streams.lock().expect("bridge streams lock");
+        if streams.len() >= MAX_STREAMS {
+            return None;
+        }
+        let id = match host_id {
+            Some(id) => {
+                let host_streams = streams.values().filter(|s| s.host_opened).count();
+                if host_streams >= MAX_HOST_STREAMS || streams.contains_key(&id) {
+                    return None;
+                }
+                id
+            }
+            None => self.inner.next_stream.fetch_add(2, Ordering::SeqCst),
+        };
+        streams.insert(id, entry);
+        Some(id)
+    }
+
     fn open(&self, channel: &str, socket: UnixStream) {
-        let Ok(socket_for_stream) = socket.try_clone() else {
+        let peer = peer_of(&socket);
+        let (Ok(reader), Ok(shutdown_handle)) = (socket.try_clone(), socket.try_clone()) else {
             return;
         };
         let (sender, receiver) = mpsc::channel();
-        let entry = Arc::new(Stream {
-            inbound: Mutex::new(Some(sender)),
-            credit: Credit::new(STREAM_WINDOW as usize),
-            socket: socket_for_stream,
-            open_directions: AtomicU8::new(2),
-        });
-        let id = {
-            let mut streams = self.inner.streams.lock().expect("bridge streams lock");
-            if streams.len() >= MAX_STREAMS {
-                return;
-            }
-            let id = self.inner.next_stream.fetch_add(2, Ordering::SeqCst);
-            streams.insert(id, entry.clone());
-            id
+        let entry = Arc::new(Stream::new(
+            sender,
+            Some(Endpoint::Unix(shutdown_handle)),
+            false,
+        ));
+        let Some(id) = self.register(entry.clone(), None) else {
+            return;
         };
         let opened = Frame::Open {
             stream: id,
             channel: channel.to_string(),
+            peer,
         };
         if self.send(&opened).is_err() {
             self.abort(id, false);
             return;
         }
-        let Ok(reader) = socket.try_clone() else {
+        let bridge = self.clone();
+        std::thread::spawn(move || bridge.forward_bytes_to_host(id, reader, &entry));
+        let bridge = self.clone();
+        std::thread::spawn(move || bridge.forward_bytes_to_endpoint(id, socket, receiver));
+    }
+
+    /// Accepts a stream the host opens on a relay channel.  The stream is registered at
+    /// once, so that data the host sends before the connection completes waits for it.
+    fn open_relay(&self, id: u32, channel: &str) {
+        let Some(target) = RelayTarget::from_channel(channel) else {
+            let _ = self.send(&Frame::Close { stream: id });
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        let entry = Arc::new(Stream::new(sender, None, true));
+        if self.register(entry.clone(), Some(id)).is_none() {
+            let _ = self.send(&Frame::Close { stream: id });
+            return;
+        }
+        let bridge = self.clone();
+        std::thread::spawn(move || bridge.connect_relay(id, target, entry, receiver));
+    }
+
+    fn connect_relay(
+        &self,
+        id: u32,
+        target: RelayTarget,
+        entry: Arc<Stream>,
+        receiver: mpsc::Receiver<Inbound>,
+    ) {
+        match target.protocol {
+            RelayProtocol::Tcp => {
+                let Some((reader, writer, handle)) = connect_tcp(target.port) else {
+                    self.abort(id, true);
+                    return;
+                };
+                entry.set_endpoint(Endpoint::Tcp(handle));
+                let bridge = self.clone();
+                std::thread::spawn(move || bridge.forward_bytes_to_host(id, reader, &entry));
+                self.forward_bytes_to_endpoint(id, writer, receiver);
+            }
+            RelayProtocol::Udp => {
+                let Ok(socket) = connect_udp(target.port) else {
+                    self.abort(id, true);
+                    return;
+                };
+                let socket = Arc::new(socket);
+                entry.set_endpoint(Endpoint::Udp);
+                let bridge = self.clone();
+                let reader = socket.clone();
+                std::thread::spawn(move || bridge.forward_datagrams_to_host(id, &reader, &entry));
+                self.forward_datagrams_to_endpoint(id, &socket, receiver);
+            }
+            RelayProtocol::Sctp => self.connect_sctp(id, target.port, entry, receiver),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn connect_sctp(
+        &self,
+        id: u32,
+        port: u16,
+        entry: Arc<Stream>,
+        receiver: mpsc::Receiver<Inbound>,
+    ) {
+        let Some(association) = sctp::Association::connect_loopback(port, RELAY_CONNECT_TIMEOUT)
+        else {
             self.abort(id, true);
             return;
         };
+        let association = Arc::new(association);
+        entry.set_endpoint(Endpoint::Sctp(association.clone()));
         let bridge = self.clone();
-        let reader_entry = entry.clone();
-        std::thread::spawn(move || bridge.forward_to_host(id, reader, &reader_entry));
-        let bridge = self.clone();
-        std::thread::spawn(move || bridge.forward_to_socket(id, socket, receiver));
+        let reader = association.clone();
+        std::thread::spawn(move || bridge.forward_sctp_to_host(id, &reader, &entry));
+        self.forward_sctp_to_endpoint(id, &association, receiver);
     }
 
-    fn forward_to_host(&self, id: u32, mut socket: UnixStream, entry: &Stream) {
+    /// SCTP relays exist only where the container's kernel provides SCTP.
+    #[cfg(not(target_os = "linux"))]
+    fn connect_sctp(
+        &self,
+        id: u32,
+        _port: u16,
+        _entry: Arc<Stream>,
+        _receiver: mpsc::Receiver<Inbound>,
+    ) {
+        self.abort(id, true);
+    }
+
+    fn forward_bytes_to_host(&self, id: u32, mut reader: impl Read, entry: &Stream) {
         let mut buffer = vec![0u8; MAX_DATA];
         while let Some(allowance) = entry.credit.wait_available(MAX_DATA) {
-            match socket.read(&mut buffer[..allowance]) {
+            match reader.read(&mut buffer[..allowance]) {
                 Ok(0) => {
                     if self.stream(id).is_some() {
                         let _ = self.send(&Frame::Shutdown { stream: id });
@@ -255,29 +428,188 @@ impl Bridge {
         }
     }
 
-    fn forward_to_socket(&self, id: u32, mut socket: UnixStream, inbound: mpsc::Receiver<Inbound>) {
+    fn forward_bytes_to_endpoint(
+        &self,
+        id: u32,
+        mut writer: impl Write + HalfClose,
+        inbound: mpsc::Receiver<Inbound>,
+    ) {
         for message in inbound {
             match message {
                 Inbound::Data(bytes) => {
-                    if socket.write_all(&bytes).is_err() {
+                    if writer.write_all(&bytes).is_err() {
                         self.abort(id, true);
                         return;
                     }
-                    let credit = Frame::Credit {
-                        stream: id,
-                        bytes: bytes.len() as u32,
-                    };
-                    if self.send(&credit).is_err() {
+                    if self.return_credit(id, bytes.len()).is_err() {
                         return;
                     }
                 }
                 Inbound::Shutdown => {
-                    let _ = socket.shutdown(Shutdown::Write);
+                    writer.close_write();
                     self.finish_direction(id);
                     return;
                 }
             }
         }
+    }
+
+    /// Forwards datagrams while the stream holds credit for them and drops the rest, as a
+    /// congested path would, so a stalled host never makes the bridge buffer.
+    fn forward_datagrams_to_host(&self, id: u32, socket: &UdpSocket, entry: &Stream) {
+        let mut buffer = vec![0u8; u16::MAX as usize];
+        while self.stream(id).is_some() {
+            match socket.recv(&mut buffer) {
+                Ok(n) => {
+                    let encoded = Message::datagram(buffer[..n].to_vec()).encode();
+                    if !entry.credit.try_consume(encoded.len()) {
+                        continue;
+                    }
+                    if self.send_message_bytes(id, &encoded).is_err() {
+                        return;
+                    }
+                }
+                Err(error) if is_transient_datagram_error(&error) => continue,
+                Err(_) => {
+                    self.abort(id, true);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn forward_datagrams_to_endpoint(
+        &self,
+        id: u32,
+        socket: &UdpSocket,
+        inbound: mpsc::Receiver<Inbound>,
+    ) {
+        let mut reader = MessageReader::default();
+        for message in inbound {
+            match message {
+                Inbound::Data(bytes) => {
+                    reader.push(&bytes);
+                    loop {
+                        match reader.next_message() {
+                            // A datagram the socket refuses is lost, as UDP allows.
+                            Ok(Some(message)) => {
+                                let _ = socket.send(&message.payload);
+                            }
+                            Ok(None) => break,
+                            Err(_) => {
+                                self.abort(id, true);
+                                return;
+                            }
+                        }
+                    }
+                    if self.return_credit(id, bytes.len()).is_err() {
+                        return;
+                    }
+                }
+                Inbound::Shutdown => {
+                    self.finish_direction(id);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Forwards SCTP messages, waiting for credit rather than dropping, since SCTP is
+    /// reliable.
+    #[cfg(target_os = "linux")]
+    fn forward_sctp_to_host(&self, id: u32, association: &sctp::Association, entry: &Stream) {
+        loop {
+            match association.receive() {
+                Ok(Some(message)) => {
+                    let encoded = message.encode();
+                    let mut sent = 0;
+                    while sent < encoded.len() {
+                        let Some(allowance) = entry.credit.wait_available(MAX_DATA) else {
+                            return;
+                        };
+                        let end = (sent + allowance).min(encoded.len());
+                        entry.credit.consume(end - sent);
+                        let data = Frame::Data {
+                            stream: id,
+                            bytes: encoded[sent..end].to_vec(),
+                        };
+                        if self.send(&data).is_err() {
+                            return;
+                        }
+                        sent = end;
+                    }
+                }
+                Ok(None) => {
+                    if self.stream(id).is_some() {
+                        let _ = self.send(&Frame::Shutdown { stream: id });
+                        self.finish_direction(id);
+                    }
+                    return;
+                }
+                Err(_) => {
+                    self.abort(id, true);
+                    return;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn forward_sctp_to_endpoint(
+        &self,
+        id: u32,
+        association: &sctp::Association,
+        inbound: mpsc::Receiver<Inbound>,
+    ) {
+        let mut reader = MessageReader::default();
+        for message in inbound {
+            match message {
+                Inbound::Data(bytes) => {
+                    reader.push(&bytes);
+                    loop {
+                        match reader.next_message() {
+                            Ok(Some(message)) => {
+                                if association.send(&message).is_err() {
+                                    self.abort(id, true);
+                                    return;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(_) => {
+                                self.abort(id, true);
+                                return;
+                            }
+                        }
+                    }
+                    if self.return_credit(id, bytes.len()).is_err() {
+                        return;
+                    }
+                }
+                Inbound::Shutdown => {
+                    association.shutdown_write();
+                    self.finish_direction(id);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Sends an encoded message in as many data frames as it needs.
+    fn send_message_bytes(&self, id: u32, encoded: &[u8]) -> io::Result<()> {
+        for chunk in encoded.chunks(MAX_DATA) {
+            self.send(&Frame::Data {
+                stream: id,
+                bytes: chunk.to_vec(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn return_credit(&self, id: u32, bytes: usize) -> io::Result<()> {
+        self.send(&Frame::Credit {
+            stream: id,
+            bytes: bytes as u32,
+        })
     }
 
     fn stream(&self, id: u32) -> Option<Arc<Stream>> {
@@ -325,11 +657,115 @@ impl Bridge {
         };
         entry.credit.close();
         entry.inbound.lock().expect("stream inbound lock").take();
-        let _ = entry.socket.shutdown(Shutdown::Both);
+        if let Some(endpoint) = entry
+            .endpoint
+            .lock()
+            .expect("stream endpoint lock")
+            .as_ref()
+        {
+            endpoint.shutdown();
+        }
         if notify_host {
             let _ = self.send(&Frame::Close { stream: id });
         }
     }
+}
+
+/// Connects to `port` on the container's loopback, IPv4 first, returning a reader, a
+/// writer, and a handle that shuts the connection down.
+fn connect_tcp(port: u16) -> Option<(TcpStream, TcpStream, TcpStream)> {
+    let addresses = [
+        SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+        SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+    ];
+    let stream = addresses
+        .iter()
+        .find_map(|address| TcpStream::connect_timeout(address, RELAY_CONNECT_TIMEOUT).ok())?;
+    let _ = stream.set_nodelay(true);
+    let reader = stream.try_clone().ok()?;
+    let handle = stream.try_clone().ok()?;
+    Some((reader, stream, handle))
+}
+
+/// A UDP socket connected to `port` on the container's loopback: IPv4 unless only an
+/// IPv6 socket is bound to the port.  UDP reports nothing at connect time, so the choice
+/// comes from the container's socket tables.
+fn connect_udp(port: u16) -> io::Result<UdpSocket> {
+    let ipv4 = std::fs::read_to_string("/proc/net/udp").unwrap_or_default();
+    let ipv6 = std::fs::read_to_string("/proc/net/udp6").unwrap_or_default();
+    let use_ipv6 = !table_binds_port(&ipv4, port) && table_binds_port(&ipv6, port);
+    let (local, target): (SocketAddr, SocketAddr) = if use_ipv6 {
+        (
+            (Ipv6Addr::LOCALHOST, 0).into(),
+            (Ipv6Addr::LOCALHOST, port).into(),
+        )
+    } else {
+        (
+            (Ipv4Addr::LOCALHOST, 0).into(),
+            (Ipv4Addr::LOCALHOST, port).into(),
+        )
+    };
+    let socket = UdpSocket::bind(local)?;
+    socket.connect(target)?;
+    socket.set_read_timeout(Some(DATAGRAM_POLL))?;
+    Ok(socket)
+}
+
+/// Whether a `/proc/net/udp` or `udp6` table lists a socket bound to `port`.
+fn table_binds_port(table: &str, port: u16) -> bool {
+    table.lines().skip(1).any(|line| {
+        line.split_whitespace()
+            .nth(1)
+            .and_then(|local| local.rsplit_once(':'))
+            .and_then(|(_, hex_port)| u16::from_str_radix(hex_port, 16).ok())
+            == Some(port)
+    })
+}
+
+fn is_transient_datagram_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::Interrupted
+            // An earlier datagram met a closed port; the flow itself stays usable.
+            | io::ErrorKind::ConnectionRefused
+    )
+}
+
+/// The process that connected to one of the bridge's sockets, read with `SO_PEERCRED`.
+#[cfg(target_os = "linux")]
+fn peer_of(socket: &UnixStream) -> Option<Peer> {
+    use std::os::unix::io::AsRawFd;
+    // SAFETY: getsockopt writes at most `length` bytes into the zeroed ucred it is given.
+    let credentials = unsafe {
+        let mut credentials: libc::ucred = std::mem::zeroed();
+        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let result = libc::getsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        );
+        (result == 0).then_some(credentials)
+    }?;
+    let pid = u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0)?;
+    let command = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .split('\0')
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    Some(Peer::new(pid, &command))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn peer_of(_socket: &UnixStream) -> Option<Peer> {
+    None
 }
 
 /// How many bytes one side of a stream may still send before the receiver returns credit.
@@ -373,6 +809,16 @@ impl Credit {
         state.available = state.available.saturating_sub(used);
     }
 
+    /// Takes `wanted` bytes of credit when that much is available, without waiting.
+    fn try_consume(&self, wanted: usize) -> bool {
+        let mut state = self.state.lock().expect("credit lock");
+        if state.closed || state.available < wanted {
+            return false;
+        }
+        state.available -= wanted;
+        true
+    }
+
     fn add(&self, granted: usize) {
         let mut state = self.state.lock().expect("credit lock");
         state.available = state.available.saturating_add(granted);
@@ -388,7 +834,7 @@ impl Credit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::net::TcpListener;
 
     struct Harness {
         host: UnixStream,
@@ -440,12 +886,22 @@ mod tests {
         fn connect(&mut self) -> (UnixStream, u32) {
             let client = UnixStream::connect(&self.socket_path).unwrap();
             match self.next_frame() {
-                Frame::Open { stream, channel } => {
+                Frame::Open {
+                    stream, channel, ..
+                } => {
                     assert_eq!(channel, "orchestrator");
                     (client, stream)
                 }
                 other => panic!("expected an open frame, got {other:?}"),
             }
+        }
+
+        fn open_relay(&mut self, stream: u32, channel: &str) {
+            self.send(Frame::Open {
+                stream,
+                channel: channel.into(),
+                peer: None,
+            });
         }
     }
 
@@ -484,6 +940,22 @@ mod tests {
         client.read_exact(&mut reply).unwrap();
         assert_eq!(&reply, b"pong\n");
         assert_eq!(harness.next_frame(), Frame::Credit { stream, bytes: 5 });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_bridge_opened_stream_names_the_process_that_connected() {
+        let mut harness = start();
+        let _client = UnixStream::connect(&harness.socket_path).unwrap();
+        match harness.next_frame() {
+            Frame::Open {
+                peer: Some(peer), ..
+            } => {
+                assert_eq!(peer.pid, std::process::id());
+                assert!(!peer.command.is_empty());
+            }
+            other => panic!("expected an open frame naming its peer, got {other:?}"),
+        }
     }
 
     #[test]
@@ -551,13 +1023,116 @@ mod tests {
     }
 
     #[test]
-    fn streams_opened_by_the_host_are_refused() {
-        let mut harness = start();
-        harness.send(Frame::Open {
-            stream: 2,
-            channel: "relay:54549".into(),
+    fn a_host_opened_tcp_stream_reaches_a_loopback_server() {
+        let server = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let echo = std::thread::spawn(move || {
+            let (mut connection, _) = server.accept().unwrap();
+            let mut request = [0u8; 4];
+            connection.read_exact(&mut request).unwrap();
+            connection.write_all(b"pong").unwrap();
+            request
         });
+        let mut harness = start();
+        harness.open_relay(2, &format!("relay:tcp:{port}"));
+        harness.send(Frame::Data {
+            stream: 2,
+            bytes: b"ping".to_vec(),
+        });
+        let mut reply = Vec::new();
+        let mut credit = 0;
+        while reply.len() < 4 || credit < 4 {
+            match harness.next_frame() {
+                Frame::Data { stream: 2, bytes } => reply.extend(bytes),
+                Frame::Credit { stream: 2, bytes } => credit += bytes,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(reply, b"pong");
+        assert_eq!(&echo.join().unwrap(), b"ping");
+    }
+
+    #[test]
+    fn a_host_opened_udp_stream_carries_datagrams_as_messages() {
+        let server = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let echo = std::thread::spawn(move || {
+            let mut buffer = [0u8; 64];
+            let (n, from) = server.recv_from(&mut buffer).unwrap();
+            server.send_to(&buffer[..n], from).unwrap();
+            buffer[..n].to_vec()
+        });
+        let mut harness = start();
+        harness.open_relay(4, &format!("relay:udp:{port}"));
+        harness.send(Frame::Data {
+            stream: 4,
+            bytes: Message::datagram(b"query".to_vec()).encode(),
+        });
+        let mut reader = MessageReader::default();
+        let reply = loop {
+            match harness.next_frame() {
+                Frame::Data { stream: 4, bytes } => {
+                    reader.push(&bytes);
+                    if let Some(message) = reader.next_message().unwrap() {
+                        break message;
+                    }
+                }
+                Frame::Credit { stream: 4, .. } => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        };
+        assert_eq!(reply.payload, b"query");
+        assert_eq!(echo.join().unwrap(), b"query");
+    }
+
+    #[test]
+    fn relay_streams_to_unknown_channels_or_closed_ports_are_closed() {
+        let unused = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let closed_port = unused.local_addr().unwrap().port();
+        drop(unused);
+        let mut harness = start();
+        harness.open_relay(2, "relay:54549");
         assert_eq!(harness.next_frame(), Frame::Close { stream: 2 });
+        harness.open_relay(4, "orchestrator");
+        assert_eq!(harness.next_frame(), Frame::Close { stream: 4 });
+        harness.open_relay(6, &format!("relay:tcp:{closed_port}"));
+        assert_eq!(harness.next_frame(), Frame::Close { stream: 6 });
+    }
+
+    #[test]
+    fn host_streams_numbered_like_bridge_streams_are_refused() {
+        let mut harness = start();
+        harness.open_relay(3, "relay:tcp:80");
+        assert_eq!(harness.next_frame(), Frame::Close { stream: 3 });
+    }
+
+    #[test]
+    fn the_host_may_not_hold_more_streams_than_its_share() {
+        let bridge = Bridge::new(io::sink());
+        for index in 0..MAX_HOST_STREAMS {
+            let (sender, _receiver) = mpsc::channel();
+            let entry = Arc::new(Stream::new(sender, None, true));
+            assert!(bridge
+                .register(entry, Some(2 * (index as u32 + 1)))
+                .is_some());
+        }
+        let (sender, _receiver) = mpsc::channel();
+        let over = Arc::new(Stream::new(sender, None, true));
+        assert!(bridge.register(over, Some(100_000)).is_none());
+        let (sender, _receiver) = mpsc::channel();
+        let bridge_stream = Arc::new(Stream::new(sender, None, false));
+        assert!(
+            bridge.register(bridge_stream, None).is_some(),
+            "the bridge's own channels keep their share"
+        );
+    }
+
+    #[test]
+    fn udp_tables_are_read_for_the_bound_port() {
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n  482: 00000000:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 3131 2 0000000000000000 0\n";
+        assert!(table_binds_port(table, 5353));
+        assert!(!table_binds_port(table, 53));
+        assert!(!table_binds_port("", 5353));
     }
 
     #[test]

@@ -218,6 +218,8 @@ dependencies = [
 name = "clyean-bridge"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "socket2",
  "tempfile",
  "tokio",
 ]

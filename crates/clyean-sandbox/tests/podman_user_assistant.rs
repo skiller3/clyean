@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use clyean_agents::AgentId;
 use clyean_bridge::host::{serve, ConnectFuture, Connector, LocalStream};
+use clyean_bridge::protocol::Peer;
 use clyean_plantuml::render::CommandRunner;
 use clyean_project::{LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout};
 use clyean_project::{ProjectType, SandboxConfig, SandboxId};
@@ -156,18 +157,18 @@ impl Fixture {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
-        let (introduced, version) = tokio::sync::oneshot::channel();
+        let (introduced, introduction) = tokio::sync::oneshot::channel();
         tokio::spawn(serve(
             session.stdout.take().unwrap(),
             session.stdin.take().unwrap(),
             Arc::new(TaggingConnector(tag.to_string())),
             introduced,
         ));
-        let version = tokio::time::timeout(Duration::from_secs(30), version)
+        let introduction = tokio::time::timeout(Duration::from_secs(30), introduction)
             .await
             .expect("the bridge introduced itself in time")
             .unwrap();
-        assert_eq!(version, clyean_bridge::VERSION);
+        assert_eq!(introduction.version, clyean_bridge::VERSION);
         session
     }
 }
@@ -215,7 +216,7 @@ impl Launched {
 struct TaggingConnector(String);
 
 impl Connector for TaggingConnector {
-    fn connect<'a>(&'a self, channel: &'a str) -> ConnectFuture<'a> {
+    fn connect<'a>(&'a self, channel: &'a str, _peer: Option<&'a Peer>) -> ConnectFuture<'a> {
         Box::pin(async move {
             if channel != clyean_bridge::ORCHESTRATOR_CHANNEL {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "no such channel"));

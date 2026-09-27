@@ -17,6 +17,10 @@ pub mod container;
 pub mod gate;
 #[cfg(feature = "host")]
 pub mod host;
+#[cfg(feature = "host")]
+pub mod relay;
+#[cfg(target_os = "linux")]
+pub mod sctp;
 
 /// Where the bridge executable is mounted, read-only, inside User Assistant containers.
 pub const CONTAINER_PATH: &str = "/usr/local/libexec/clyean/clyean-bridge";

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clyean_agents::AgentId;
 use clyean_bridge::host::{self as bridge_host, ConnectFuture, Connector, LocalStream};
+use clyean_bridge::protocol::Peer;
 use clyean_orchestrator::scaffold::{
     prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
 };
@@ -309,10 +310,11 @@ async fn open_bridge(
             tracing::info!(target: "clyean::bridge", "{line}");
         }
     });
-    let (introduced, version) = tokio::sync::oneshot::channel();
+    let (introduced, introduction) = tokio::sync::oneshot::channel();
     let served = tokio::spawn(bridge_host::serve(output, input, connector, introduced));
-    match tokio::time::timeout(BRIDGE_START_TIMEOUT, version).await {
-        Ok(Ok(version)) => {
+    match tokio::time::timeout(BRIDGE_START_TIMEOUT, introduction).await {
+        Ok(Ok(introduction)) => {
+            let version = introduction.version;
             tracing::info!(target: "clyean::bridge", %version, container = %container_name, "bridge open");
             Ok(OpenBridge { session, served })
         }
@@ -338,7 +340,7 @@ struct LaunchConnector {
 }
 
 impl Connector for LaunchConnector {
-    fn connect<'a>(&'a self, channel: &'a str) -> ConnectFuture<'a> {
+    fn connect<'a>(&'a self, channel: &'a str, _peer: Option<&'a Peer>) -> ConnectFuture<'a> {
         Box::pin(async move {
             match channel {
                 clyean_bridge::ORCHESTRATOR_CHANNEL => Ok(self.orchestrator_stream()),
