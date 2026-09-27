@@ -6,6 +6,7 @@
 
 mod cli;
 mod commands;
+mod relays;
 mod runtime;
 
 use clap::Parser;

@@ -10,7 +10,7 @@ use clyean_agents::AgentId;
 
 use crate::user::ContainerUser;
 
-pub const ORCHESTRATOR_SOCKET_CONTAINER_PATH: &str = "/run/clyean/orchestrator.sock";
+pub const ORCHESTRATOR_SOCKET_CONTAINER_PATH: &str = clyean_bridge::ORCHESTRATOR_SOCKET;
 pub const HARNESS_CONTAINER_PATH: &str = "/usr/local/bin/clyean";
 
 /// A bind mount.  The source is a path on the Podman host, which inside a Podman machine

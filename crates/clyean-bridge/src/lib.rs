@@ -12,6 +12,8 @@
 pub mod protocol;
 
 #[cfg(unix)]
+pub mod client;
+#[cfg(unix)]
 pub mod container;
 #[cfg(unix)]
 pub mod gate;
@@ -31,6 +33,9 @@ pub const READY_FILE: &str = "/run/clyean/bridge.ready";
 
 /// The channel carrying the orchestrator protocol.
 pub const ORCHESTRATOR_CHANNEL: &str = "orchestrator";
+
+/// Where the orchestrator channel's socket is inside User Assistant containers.
+pub const ORCHESTRATOR_SOCKET: &str = "/run/clyean/orchestrator.sock";
 
 /// The channel carrying the Herdr socket API, passed through unmodified.
 pub const HERDR_CHANNEL: &str = "herdr";

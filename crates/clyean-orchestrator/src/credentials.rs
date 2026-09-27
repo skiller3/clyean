@@ -2,15 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
 
 //! The credential authority: the User Assistant's harness, which holds every sign-in and
-//! answers the orchestrator's requests for credential copies over its lease connection.
-//! Once the lease is granted, the orchestrator writes requests on that connection and the
-//! User Assistant answers each one with the request's identifier.  From the answers, the
-//! orchestrator plans what each sub-agent receives when it starts and renews copies while
-//! it works.
+//! answers the orchestrator's requests for credential copies over its lease.  From the
+//! answers, the orchestrator plans what each sub-agent receives when it starts and renews
+//! copies while it works.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clyean_agents::{AgentId, AgentNeeds};
@@ -18,9 +15,8 @@ use clyean_harness::session::BoxFuture;
 use clyean_harness::{RpcFrame, UiRequestHandler};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt, Lines};
-use tokio::sync::{mpsc, oneshot};
 
+use crate::lease::{LeaseError, UserAssistantLease};
 use crate::{OrchestratorError, Result};
 
 pub const RESOLVE_METHOD: &str = "credentials.resolve";
@@ -48,72 +44,36 @@ pub enum AuthorityError {
     Malformed(String),
 }
 
+impl From<LeaseError> for AuthorityError {
+    fn from(error: LeaseError) -> Self {
+        match error {
+            LeaseError::Unavailable => Self::Unavailable,
+            LeaseError::Closed => Self::Closed,
+            LeaseError::Timeout(_) => Self::Timeout,
+            LeaseError::Refused { message, .. } => Self::Refused(message),
+            LeaseError::Malformed(message) => Self::Malformed(message),
+        }
+    }
+}
+
 impl From<AuthorityError> for OrchestratorError {
     fn from(error: AuthorityError) -> Self {
         Self::Credentials(error.to_string())
     }
 }
 
-type Answer = std::result::Result<Value, AuthorityError>;
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Answer>>>>;
-
-struct Connection {
-    generation: u64,
-    outgoing: mpsc::UnboundedSender<String>,
-    pending: Pending,
-}
-
-/// The User Assistant's lease connection, when one is open, and the requests sent on it.
-#[derive(Default)]
+/// Asks the User Assistant, over its lease, about models and for credential copies.
 pub struct CredentialAuthority {
-    connection: Mutex<Option<Connection>>,
-    generations: AtomicU64,
-    next_request: AtomicU64,
+    lease: Arc<UserAssistantLease>,
 }
 
 impl CredentialAuthority {
-    pub fn is_connected(&self) -> bool {
-        self.connection.lock().expect("unpoisoned").is_some()
+    pub fn new(lease: Arc<UserAssistantLease>) -> Self {
+        Self { lease }
     }
 
-    /// Serves one lease connection until it ends: writes the orchestrator's requests and
-    /// routes the User Assistant's answers to them.  A newer lease replaces an older one.
-    pub async fn serve<R, W>(&self, mut lines: Lines<R>, mut writer: W) -> std::io::Result<()>
-    where
-        R: AsyncBufRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let (outgoing, mut requests) = mpsc::unbounded_channel::<String>();
-        let pending = Pending::default();
-        let generation = self.generations.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.connection.lock().expect("unpoisoned") = Some(Connection {
-            generation,
-            outgoing,
-            pending: pending.clone(),
-        });
-        let ended = loop {
-            tokio::select! {
-                line = lines.next_line() => match line {
-                    Ok(Some(line)) => route_answer(&pending, &line),
-                    Ok(None) => break Ok(()),
-                    Err(error) => break Err(error),
-                },
-                Some(request) = requests.recv() => {
-                    if let Err(error) = write_line(&mut writer, &request).await {
-                        break Err(error);
-                    }
-                }
-            }
-        };
-        let mut slot = self.connection.lock().expect("unpoisoned");
-        if slot.as_ref().is_some_and(|c| c.generation == generation) {
-            *slot = None;
-        }
-        drop(slot);
-        for (_, waiter) in pending.lock().expect("unpoisoned").drain() {
-            let _ = waiter.send(Err(AuthorityError::Closed));
-        }
-        ended
+    pub fn is_connected(&self) -> bool {
+        self.lease.is_connected()
     }
 
     /// Sends one request to the User Assistant and waits for its result.
@@ -122,34 +82,7 @@ impl CredentialAuthority {
         method: &str,
         params: Value,
     ) -> std::result::Result<Value, AuthorityError> {
-        let id = format!(
-            "credentials-{}",
-            self.next_request.fetch_add(1, Ordering::Relaxed) + 1
-        );
-        let (sender, answer) = oneshot::channel();
-        let pending = {
-            let slot = self.connection.lock().expect("unpoisoned");
-            let connection = slot.as_ref().ok_or(AuthorityError::Unavailable)?;
-            connection
-                .pending
-                .lock()
-                .expect("unpoisoned")
-                .insert(id.clone(), sender);
-            let line = json!({"id": id, "method": method, "params": params}).to_string();
-            connection
-                .outgoing
-                .send(line)
-                .map_err(|_| AuthorityError::Closed)?;
-            connection.pending.clone()
-        };
-        match tokio::time::timeout(REQUEST_TIMEOUT, answer).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(AuthorityError::Closed),
-            Err(_) => {
-                pending.lock().expect("unpoisoned").remove(&id);
-                Err(AuthorityError::Timeout)
-            }
-        }
+        Ok(self.lease.request(method, params, REQUEST_TIMEOUT).await?)
     }
 
     /// Maps model patterns to their providers and reports the User Assistant's model.
@@ -200,40 +133,6 @@ impl CredentialAuthority {
 
 fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> std::result::Result<T, AuthorityError> {
     serde_json::from_value(value).map_err(|error| AuthorityError::Malformed(error.to_string()))
-}
-
-async fn write_line<W: AsyncWrite + Unpin>(writer: &mut W, line: &str) -> std::io::Result<()> {
-    writer.write_all(line.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await
-}
-
-/// Resolves the pending request an answer line belongs to; other lines are ignored.
-fn route_answer(pending: &Pending, line: &str) {
-    let Ok(answer) = serde_json::from_str::<Value>(line) else {
-        tracing::debug!(target: "clyean::credentials", "ignoring a malformed line on the lease connection");
-        return;
-    };
-    let Some(id) = answer.get("id").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(waiter) = pending.lock().expect("unpoisoned").remove(id) else {
-        return;
-    };
-    let result = match (answer.get("result"), answer.get("error")) {
-        (Some(result), None) => Ok(result.clone()),
-        (_, Some(error)) => Err(AuthorityError::Refused(
-            error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("no reason given")
-                .to_string(),
-        )),
-        (None, None) => Err(AuthorityError::Malformed(
-            "an answer with neither result nor error".into(),
-        )),
-    };
-    let _ = waiter.send(result);
 }
 
 /// One model pattern as the User Assistant's harness resolved it.
@@ -500,19 +399,19 @@ impl UiRequestHandler for CredentialRenewals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     /// A User Assistant on the far end of a lease connection that answers every request
     /// with `answer(method, params)`.
     fn user_assistant(
         answer: impl Fn(&str, &Value) -> Value + Send + 'static,
     ) -> (Arc<CredentialAuthority>, tokio::task::JoinHandle<()>) {
-        let authority = Arc::new(CredentialAuthority::default());
+        let lease = Arc::new(UserAssistantLease::default());
+        let authority = Arc::new(CredentialAuthority::new(lease.clone()));
         let (orchestrator_end, assistant_end) = tokio::io::duplex(64 * 1024);
         let (reader, writer) = tokio::io::split(orchestrator_end);
-        let serving = authority.clone();
         tokio::spawn(async move {
-            let _ = serving.serve(BufReader::new(reader).lines(), writer).await;
+            let _ = lease.serve(BufReader::new(reader).lines(), writer).await;
         });
         let assistant = tokio::spawn(async move {
             let (reader, mut writer) = tokio::io::split(assistant_end);
@@ -668,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn requests_fail_cleanly_without_a_user_assistant_or_after_it_leaves() {
-        let authority = CredentialAuthority::default();
+        let authority = CredentialAuthority::new(Arc::new(UserAssistantLease::default()));
         assert!(matches!(
             authority.resolve(&[]).await,
             Err(AuthorityError::Unavailable)

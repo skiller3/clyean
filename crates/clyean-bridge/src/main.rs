@@ -7,6 +7,9 @@
 //! clyean-bridge bridge --ready-file PATH [--channel NAME=PATH]...
 //! clyean-bridge await --ready-file PATH [--timeout-seconds N] -- COMMAND [ARGUMENT]...
 //! clyean-bridge connect SOCKET
+//! clyean-bridge relay open PROTOCOL HOST_PORT GUEST_PORT [--host-address ADDRESS]... [--reason TEXT]
+//! clyean-bridge relay close RELAY_ID
+//! clyean-bridge relay list
 //! clyean-bridge --version
 //! ```
 
@@ -39,6 +42,7 @@ fn run(arguments: Vec<OsString>) -> ExitCode {
         Some("bridge") => bridge(&rest),
         Some("await") => await_bridge(rest),
         Some("connect") => connect(&rest),
+        Some("relay") => relay(&rest),
         _ => usage(&format!("unknown subcommand {subcommand:?}")),
     }
 }
@@ -130,12 +134,91 @@ fn connect(arguments: &[OsString]) -> ExitCode {
     }
 }
 
+/// `relay open|close|list`: one request to the orchestrator socket, whose result, or
+/// error, is printed as one line of JSON.
+#[cfg(unix)]
+fn relay(arguments: &[OsString]) -> ExitCode {
+    let arguments: Vec<&str> = match arguments.iter().map(|a| a.to_str()).collect::<Option<_>>() {
+        Some(arguments) => arguments,
+        None => return usage("relay arguments must be UTF-8"),
+    };
+    let (method, params) = match arguments.as_slice() {
+        ["open", protocol, host_port, guest_port, options @ ..] => {
+            match relay_open_params(protocol, host_port, guest_port, options) {
+                Ok(params) => ("relay.open", params),
+                Err(problem) => return usage(&problem),
+            }
+        }
+        ["close", relay_id] => ("relay.close", serde_json::json!({"relay_id": relay_id})),
+        ["list"] => ("relay.list", serde_json::json!({})),
+        _ => return usage("relay takes open, close, or list"),
+    };
+    print_reply(method, params)
+}
+
+#[cfg(unix)]
+fn relay_open_params(
+    protocol: &str,
+    host_port: &str,
+    guest_port: &str,
+    options: &[&str],
+) -> Result<serde_json::Value, String> {
+    let port = |text: &str| -> Result<u16, String> {
+        text.parse()
+            .map_err(|_| format!("{text:?} is not a port from 1 to 65535"))
+    };
+    let mut params = serde_json::json!({
+        "protocol": protocol,
+        "host_port": port(host_port)?,
+        "guest_port": port(guest_port)?,
+    });
+    let mut addresses = Vec::new();
+    let mut options = options.iter();
+    while let Some(option) = options.next() {
+        match (*option, options.next()) {
+            ("--host-address", Some(address)) => addresses.push(address.to_string()),
+            ("--reason", Some(reason)) => params["reason"] = serde_json::json!(reason),
+            _ => return Err(format!("unexpected relay argument {option:?}")),
+        }
+    }
+    if !addresses.is_empty() {
+        params["host_addresses"] = serde_json::json!(addresses);
+    }
+    Ok(params)
+}
+
+/// Sends one request and prints its result on standard output; an error is printed there
+/// too, with its message on standard error and a failing exit status.
+#[cfg(unix)]
+fn print_reply(method: &str, params: serde_json::Value) -> ExitCode {
+    use clyean_bridge::client;
+    match client::request(&client::socket_path(), method, params) {
+        Ok(Ok(result)) => {
+            println!("{result}");
+            ExitCode::SUCCESS
+        }
+        Ok(Err(error)) => {
+            println!("{error}");
+            let message = error["message"].as_str().unwrap_or("the request failed");
+            eprintln!("clyean-bridge: {message}");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("clyean-bridge: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[cfg(unix)]
 fn usage(problem: &str) -> ExitCode {
     eprintln!("clyean-bridge: {problem}");
     eprintln!("usage: clyean-bridge bridge --ready-file PATH [--channel NAME=PATH]...");
     eprintln!("       clyean-bridge await --ready-file PATH [--timeout-seconds N] -- COMMAND [ARGUMENT]...");
     eprintln!("       clyean-bridge connect SOCKET");
+    eprintln!("       clyean-bridge relay open PROTOCOL HOST_PORT GUEST_PORT [--host-address ADDRESS]... [--reason TEXT]");
+    eprintln!("       clyean-bridge relay close RELAY_ID");
+    eprintln!("       clyean-bridge relay list");
     eprintln!("       clyean-bridge --version");
     ExitCode::from(2)
 }

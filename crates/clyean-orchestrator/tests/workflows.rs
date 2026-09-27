@@ -10,12 +10,13 @@ use std::sync::Arc;
 use clyean_agents::AgentId;
 use clyean_git::GitRepository;
 use clyean_orchestrator::agents::fake::ScriptedFactory;
-use clyean_orchestrator::protocol::{Request, StreamedEvent};
+use clyean_orchestrator::protocol::{ConnectionOrigin, Request, StreamedEvent};
 use clyean_orchestrator::scaffold::{complete_scaffold, prepare_host_files, PendingScaffold};
 use clyean_orchestrator::server::handle_connection;
 use clyean_orchestrator::service::{
     NoopRenderer, OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
 };
+use clyean_orchestrator::CredentialAuthority;
 use clyean_orchestrator::StreamedEvent as Event;
 use clyean_project::{PlanCatalog, ProjectDirectory, ProjectLayout, ProjectLock, ProjectType};
 use serde_json::{json, Value};
@@ -76,8 +77,15 @@ async fn call(service: &Arc<OrchestratorService>, request: Value) -> (Value, Vec
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (server_read, server_write) = tokio::io::split(server);
     let service = service.clone();
-    let task =
-        tokio::spawn(async move { handle_connection(service, server_read, server_write).await });
+    let task = tokio::spawn(async move {
+        handle_connection(
+            service,
+            ConnectionOrigin::default(),
+            server_read,
+            server_write,
+        )
+        .await
+    });
     let (client_read, mut client_write) = tokio::io::split(client);
     client_write
         .write_all(format!("{request}\n").as_bytes())
@@ -112,8 +120,15 @@ async fn a_lease_stays_open_until_the_user_assistant_closes_it() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (server_read, server_write) = tokio::io::split(server);
     let service = fixture.service.clone();
-    let task =
-        tokio::spawn(async move { handle_connection(service, server_read, server_write).await });
+    let task = tokio::spawn(async move {
+        handle_connection(
+            service,
+            ConnectionOrigin::default(),
+            server_read,
+            server_write,
+        )
+        .await
+    });
     let (client_read, mut client_write) = tokio::io::split(client);
     client_write
         .write_all(b"{\"id\":\"lease-1\",\"method\":\"session.lease\",\"params\":{}}\n")
@@ -141,8 +156,15 @@ async fn the_lease_carries_the_orchestrators_credential_requests() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (server_read, server_write) = tokio::io::split(server);
     let service = fixture.service.clone();
-    let task =
-        tokio::spawn(async move { handle_connection(service, server_read, server_write).await });
+    let task = tokio::spawn(async move {
+        handle_connection(
+            service,
+            ConnectionOrigin::default(),
+            server_read,
+            server_write,
+        )
+        .await
+    });
     let (client_read, mut client_write) = tokio::io::split(client);
     client_write
         .write_all(b"{\"id\":\"lease-1\",\"method\":\"session.lease\",\"params\":{}}\n")
@@ -150,7 +172,7 @@ async fn the_lease_carries_the_orchestrators_credential_requests() {
         .unwrap();
     let mut lines = BufReader::new(client_read).lines();
     lines.next_line().await.unwrap().unwrap();
-    let authority = fixture.service.credential_authority().clone();
+    let authority = Arc::new(CredentialAuthority::new(fixture.service.lease().clone()));
     for _ in 0..100 {
         if authority.is_connected() {
             break;
@@ -170,7 +192,39 @@ async fn the_lease_carries_the_orchestrators_credential_requests() {
     assert_eq!(variables["openai"], ["OPENAI_API_KEY"]);
     client_write.shutdown().await.unwrap();
     task.await.unwrap().unwrap();
-    assert!(!fixture.service.credential_authority().is_connected());
+    assert!(!fixture.service.lease().is_connected());
+}
+
+#[tokio::test]
+async fn only_the_first_lease_of_a_bridge_session_is_granted() {
+    let fixture = scaffolded_fixture().await;
+    let lease = json!({"id": "lease-1", "method": "session.lease", "params": {}});
+    let (first, second) = (tokio::io::duplex(64 * 1024), tokio::io::duplex(64 * 1024));
+    let mut granted = Vec::new();
+    for (client, server) in [first, second] {
+        let (server_read, server_write) = tokio::io::split(server);
+        let service = fixture.service.clone();
+        tokio::spawn(async move {
+            handle_connection(
+                service,
+                ConnectionOrigin::default(),
+                server_read,
+                server_write,
+            )
+            .await
+        });
+        let (client_read, mut client_write) = tokio::io::split(client);
+        client_write
+            .write_all(format!("{lease}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(client_read).lines();
+        let response: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        granted.push((response, client_write));
+    }
+    assert_eq!(granted[0].0["result"]["type"], "lease");
+    assert_eq!(granted[1].0["error"]["code"], "lease_held");
 }
 
 #[tokio::test]

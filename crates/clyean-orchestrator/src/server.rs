@@ -3,9 +3,9 @@
 
 //! The connection handling of the orchestrator protocol: one request per connection, an
 //! immediate response, then streamed events until a closing event.  The lease is the
-//! exception: it stays open for the User Assistant's life and carries the orchestrator's
-//! credential requests.  Connections arrive through the bridge of the User Assistant's
-//! container, so any byte stream serves.
+//! exception: the first one stays open for the User Assistant's life and carries requests
+//! both ways, and every later one is refused.  Connections arrive through the bridge of
+//! the User Assistant's container, so any byte stream serves.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,12 +14,11 @@ use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
 
-use crate::protocol::{Request, Response, StreamedEvent};
+use crate::protocol::{ConnectionOrigin, Request, Response, StreamedEvent};
 use crate::service::{Dispatch, OrchestratorService};
 
 /// The method a User Assistant calls once and keeps open for its whole life; the
-/// connection ending tells it that its `clyean` process is gone.  The orchestrator sends
-/// its credential requests on this connection.
+/// connection ending tells it that its `clyean` process is gone.
 pub const LEASE_METHOD: &str = "session.lease";
 
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -27,6 +26,7 @@ const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Serves one connection over any byte stream (exercised directly by tests).
 pub async fn handle_connection<R, W>(
     service: Arc<OrchestratorService>,
+    origin: ConnectionOrigin,
     reader: R,
     mut writer: W,
 ) -> std::io::Result<()>
@@ -50,11 +50,20 @@ where
         }
     };
     if request.method == LEASE_METHOD {
+        let lease = service.lease().clone();
+        if !lease.claim() {
+            let refused = Response::error(
+                &request.id,
+                "lease_held",
+                "this User Assistant's container already holds its lease",
+            );
+            return write_json(&mut writer, &refused).await;
+        }
         let response = Response::result(&request.id, json!({"type": "lease"}));
         write_json(&mut writer, &response).await?;
-        return service.credential_authority().serve(lines, writer).await;
+        return lease.serve(lines, writer).await;
     }
-    let Dispatch { response, stream } = service.dispatch(request).await;
+    let Dispatch { response, stream } = service.dispatch(request, &origin).await;
     write_json(&mut writer, &response).await?;
     let Some(attachment) = stream else {
         return Ok(());

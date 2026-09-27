@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use clyean_orchestrator::protocol::{Request, StreamedEvent};
+use clyean_orchestrator::protocol::{ConnectionOrigin, Request, StreamedEvent};
 use clyean_orchestrator::scaffold::{
     prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
 };
 use clyean_orchestrator::service::{OrchestratorService, ProjectState, UnscaffoldedProject};
+use clyean_orchestrator::CredentialAuthority;
 use clyean_project::ProjectType;
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -78,7 +79,10 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
             git,
             pending,
             renderer: Arc::new(SandboxRenderer::new(context.clone())),
-            factory: Arc::new(SandboxSessionFactory::new(context, Arc::default())),
+            factory: Arc::new(SandboxSessionFactory::new(
+                context,
+                Arc::new(CredentialAuthority::new(Arc::default())),
+            )),
             clyean_version: crate::cli::VERSION.to_string(),
         })),
         crate::cli::VERSION,
@@ -88,7 +92,9 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
         method: "project.scaffold".into(),
         params: json!({"project_type": project_type}),
     };
-    let dispatch = service.dispatch(request).await;
+    let dispatch = service
+        .dispatch(request, &ConnectionOrigin::default())
+        .await;
     let response = serde_json::to_value(&dispatch.response)?;
     if let Some(error) = response.get("error") {
         bail!(
