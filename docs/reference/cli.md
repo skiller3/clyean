@@ -32,9 +32,9 @@ These apply only when no command is given.
 | `--image <IMAGE>` | Image to populate a new project's sandbox from (default `docker.io/library/ubuntu:latest`).  Ignored for scaffolded projects. |
 | `--mount <PATH>` | Host path mounted read-only at `/mnt/<base name>` in every agent container; repeatable.  Ignored for scaffolded projects. |
 
-What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; ask Podman about itself, stopping when it is older than the floor for this operating system (4.9 on Linux and Linux on WSL, 5.0 on native Windows and macOS) and warning about a Podman machine's provider or size; record a sandbox identifier in `.clyean/sandbox.local.json` when the project has none; populate and provision the sandbox root filesystem when missing or outdated, or else replace its harness when it differs from the one this `clyean` installs; project every agent's profile and record this use in the sandbox marker; find the static bridge executable (see [environment variables](environment-variables.md)); on a Podman machine, check that it sees every bind-mount source; start the orchestrator inside the `clyean` process; run this invocation's own User Assistant container in the foreground (`podman run --rm`); and, once the container runs, open its bridge with `podman exec --interactive`.  The User Assistant's harness starts only once the bridge is serving.
+What a launch does, in order: resolve the project; ask the worktree question when the project is not scaffolded; initialize Git when needed and write the agent files and ignore rules; ask Podman about itself, stopping when it is older than the floor for this operating system (4.9 on Linux and Linux on WSL, 5.0 on native Windows and macOS) and warning about a Podman machine's provider or size; record a sandbox identifier in `.clyean/sandbox.local.json` when the project has none; populate and provision the sandbox root filesystem when missing or outdated, or else replace its harness when it differs from the one this `clyean` installs; project every agent's profile and record this use in the sandbox marker; find the static bridge executable (see [environment variables](environment-variables.md)); on a Podman machine, check that it sees every bind-mount source; create the project network when it is missing, warning when agents will not reach server containers; stop the project's non-persistent server containers whose `clyean` process has ended; start the orchestrator inside the `clyean` process; run this invocation's own User Assistant container in the foreground (`podman run --rm`); and, once the container runs, open its bridge with `podman exec --interactive`.  The User Assistant's harness starts only once the bridge is serving.
 
-Every invocation gets its own container and session, so several invocations of one project can run at once; delegated work stays serialized by the project lock unless the project uses Git worktrees.  Nothing can attach to a running User Assistant, and detaching is disabled.  Ctrl-C is passed to the User Assistant rather than terminating the launcher.  When the User Assistant exits, its container is removed.  When the `clyean` process ends for any other reason, its bridge ends with it, the User Assistant shuts itself down, and Podman removes the container.
+Every invocation gets its own container and session, so several invocations of one project can run at once; delegated work stays serialized by the project lock unless the project uses Git worktrees.  Nothing can attach to a running User Assistant, and detaching is disabled.  Ctrl-C is passed to the User Assistant rather than terminating the launcher.  When the User Assistant exits, its container is removed, its relays close, the server containers this invocation launched without `persistent` stop, and `clyean` names the persistent servers still running.  When the `clyean` process ends for any other reason, its bridge ends with it, the User Assistant shuts itself down, and Podman removes the container; the next launch, or `clyean sandbox prune`, stops the non-persistent servers it left.
 
 ## Commands
 
@@ -52,7 +52,7 @@ Populates and provisions the sandbox root when it is missing or outdated, or els
 
 ### `clyean sandbox rebuild`
 
-Discards the sandbox root filesystem from a helper container, so files owned by container users are removed too, and provisions it again.  Refuses while any container of the sandbox runs.
+Discards the sandbox root filesystem from a helper container, so files owned by container users are removed too, and provisions it again.  Refuses while any container of the sandbox runs, naming `clyean server stop --all` for its server containers.
 
 ### `clyean sandbox shell`
 
@@ -60,9 +60,17 @@ Opens an interactive root shell in a maintenance container with the workspace mo
 
 ### `clyean sandbox prune [--remove]`
 
-Removes User Assistant containers, in every project, whose `clyean` process is gone: containers more than a minute old that are stopped or have no running bridge process.  They are left behind only when a User Assistant's harness stops responding and cannot shut itself down.  Containers whose processes cannot be listed are kept.
+Removes User Assistant containers, in every project, whose `clyean` process is gone: containers more than a minute old that are stopped or have no running bridge process.  They are left behind only when a User Assistant's harness stops responding and cannot shut itself down.  Containers whose processes cannot be listed are kept.  It then stops the non-persistent server containers, in every project, whose launching `clyean` process no running User Assistant container stands for.
 
-It then lists every sandbox root filesystem in Clyean's roots directory with its identifier, the project that used it last, the time of that use, its size, and whether it is orphaned: not used by a running container, and either its recorded project directory is gone or holds another sandbox identifier, or it has no marker and is more than a day old.  `--remove` deletes the orphaned root filesystems too.
+It then lists every sandbox root filesystem in Clyean's roots directory with its identifier, the project that used it last, the time of that use, its size, and whether it is orphaned: not used by a running container, and either its recorded project directory is gone or holds another sandbox identifier, or it has no marker and is more than a day old.  `--remove` deletes the orphaned root filesystems, and their projects' networks, too.
+
+### `clyean server list`
+
+Lists the project's running server containers: each server's name, whether it persists, the agent that asked for it, when it started, its command and directory, and a sentence saying where it listens inside the sandbox and on this computer, with its ports' states probed now.
+
+### `clyean server stop <NAME>` and `clyean server stop --all`
+
+Stops one server container of the project, or all of them, giving each ten seconds to shut down.  Stopping a server that is not running succeeds.
 
 ### `clyean agents`
 

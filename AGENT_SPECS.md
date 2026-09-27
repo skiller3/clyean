@@ -47,6 +47,20 @@ The User Assistant should provide information to the user just as the user would
 
 The User Assistant delegates through tools registered by a Clyean-managed harness extension: `clyean_status` (scaffold state, project type, lock state, incomplete work), `clyean_scaffold` (scaffold with a determined `project_type`), `clyean_delegate` (hand a refined prompt of one of the three software engineering prompt types to the Software Engineering Director; streams progress and returns when the work completes, fails, or needs information), `clyean_provide_information` (return the user's answers to an information request), `clyean_resume` (resume incomplete work), and `clyean_cancel`.  When a delegated tool returns an information request, the User Assistant asks the user with its `ask` tool and answers through `clyean_provide_information`, and the sub-agent sessions of the unit of work stay alive meanwhile.
 
+## Relays and Servers
+
+The same extension gives the User Assistant two more tools, whose semantics `GENERAL_SPECS.md` defines under "Relays" and "Server containers":
+
+- `clyean_relay` opens, lists, and closes relays from the user's computer into the User Assistant's own container.  The User Assistant runs a server it alone needs, or one the user should reach, in its own container, for example as a background job of its `bash` tool, and relays it; such servers and relays end with the container.
+- `clyean_server` launches, lists, and stops server containers, for servers that other agents must reach or that must outlive the `clyean` process.
+
+A denied relay comes back as an error, and the User Assistant does not ask for it again unless the user asks.  When a sub-agent launches a server during a unit of work, the progress the delegation tools relay says so; the User Assistant tells the user the server's name, where it listens inside the sandbox and on the user's computer, and whether it keeps running after Clyean exits.
+
+
+# Capabilities of Every Sub-Agent
+
+Every agent other than the User Assistant has a `clyean_server` tool, provided by a Clyean-managed extension, with which it launches, lists, and stops server containers.  The orchestrator launches the server on the agent's behalf, asking the user about each relay the launch requests, and returns the server's sandbox endpoints: its name and address on the project network and the state of each declared port.  The agent reaches the server from its own container at those endpoints, for example `curl http://web:5173/`, and makes the server listen on all interfaces.  It requests a relay only when the user, or its task, needs to reach the server from outside the sandbox.  A server that only the agent needs, and only while it follows one instruction, may instead run in the agent's own container, where it ends with the unit of work.
+
 
 # Scaffolder
 

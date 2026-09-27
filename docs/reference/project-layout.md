@@ -23,7 +23,7 @@ Everything Clyean keeps in a project lives under `.clyean/`, beside the project'
 | `.clyean/plans/.gitkeep` | yes | Clyean | Keeps the directory in Git. |
 | `.clyean/work/<work-id>.json` | no | Clyean | Journals of research and scaffolding work. |
 | `.clyean/lock` | no | Clyean | Advisory file lock held while a unit of work runs (unused when worktrees are enabled). |
-| `.clyean/logs/` | no | reserved | Reserved for logs. |
+| `.clyean/logs/servers/<name>.log` | no (`/logs/`) | Clyean | The output of server container `<name>`, truncated by each launch and ending with the exit status of its command once it ends.  Agents read it to see why a server failed. |
 | `.clyean/sandbox.local.json` | no | Clyean | The identifier of the project's sandbox root filesystem, which lives outside the project beside Podman's data; see the [sandbox contract](sandbox-contract.md#root-filesystem).  Local-only, so a moved project keeps its sandbox, every clone gets its own, and copying the file into another checkout makes both share one. |
 
 `<NAME>` is the agent identifier in upper snake case, for example `SOFTWARE_ENGINEERING_DIRECTOR`.
