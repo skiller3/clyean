@@ -107,6 +107,7 @@ impl Fixture {
             sandbox,
             host_paths: HostPathMapper::new(environment.topology, HostOs::current()),
             git_settings: Vec::new(),
+            host_config_dir: clyean_sandbox::launch::config_dir(),
         };
         Some(Self {
             podman,

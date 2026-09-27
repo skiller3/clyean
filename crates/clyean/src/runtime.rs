@@ -27,7 +27,7 @@ use clyean_plantuml::RenderReport;
 use clyean_project::{
     ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig, SandboxId,
 };
-use clyean_sandbox::launch::{cache_dir, BUILTIN_PASSTHROUGH_PATTERNS};
+use clyean_sandbox::launch::{cache_dir, config_dir, BUILTIN_PASSTHROUGH_PATTERNS};
 use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
@@ -186,6 +186,7 @@ impl ProjectRuntime {
                     clyean_git::host_setting(key).map(|value| (key.to_string(), value))
                 })
                 .collect(),
+            host_config_dir: config_dir(),
         }
     }
 

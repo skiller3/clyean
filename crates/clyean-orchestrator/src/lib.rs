@@ -6,6 +6,7 @@
 //! sessions, and journals every unit of work so that it can be resumed.
 
 pub mod agents;
+pub mod allowlist;
 pub mod credentials;
 pub mod events;
 pub mod journal;

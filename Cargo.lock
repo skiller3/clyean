@@ -256,6 +256,7 @@ dependencies = [
  "clyean-plantuml",
  "clyean-project",
  "clyean-sandbox",
+ "fd-lock",
  "regex",
  "serde",
  "serde_json",

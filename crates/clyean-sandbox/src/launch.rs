@@ -49,6 +49,9 @@ pub struct LaunchContext {
     /// The host's Git settings that must hold inside containers too, such as
     /// `core.autocrlf`, so that files do not look modified on the other side.
     pub git_settings: Vec<(String, String)>,
+    /// Clyean's host configuration directory, which holds the relay file.  Every container
+    /// gets an empty filesystem over it when the workspace contains it.
+    pub host_config_dir: PathBuf,
 }
 
 /// How an agent participates in work, which decides its interactivity and identity.
@@ -143,6 +146,16 @@ impl LaunchContext {
         (vec![own_profile], masks)
     }
 
+    /// Empty filesystems over the host directories of Clyean's own state that the workspace
+    /// contains, such as its configuration directory when the workspace is the home
+    /// directory, so that nothing in the sandbox reads or edits them.
+    pub fn host_state_masks(&self, paths: &ContainerPaths) -> Vec<String> {
+        paths
+            .translate_host_path(&self.host_config_dir)
+            .into_iter()
+            .collect()
+    }
+
     /// The names and patterns of the host variables `agent` receives in `role`: the User
     /// Assistant gets the built-in provider patterns and the project's entries written as
     /// names; a sub-agent gets its providers' variables and the project's entries that name
@@ -233,8 +246,9 @@ impl LaunchContext {
     ) -> AgentContainerSpec {
         let paths = self.container_paths();
         let mut mounts = self.shared_mounts(&paths);
-        let (profile_mounts, tmpfs_mounts) = self.profile_isolation(agent, &role);
+        let (profile_mounts, mut tmpfs_mounts) = self.profile_isolation(agent, &role);
         mounts.extend(profile_mounts);
+        tmpfs_mounts.extend(self.host_state_masks(&paths));
         let mut environment =
             select_host_variables(std::env::vars(), &self.secret_patterns(agent, &role));
         environment.extend(self.shared_environment(agent, &paths));
@@ -459,6 +473,23 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// Where Clyean keeps host-only configuration, such as the relay file: `%APPDATA%\clyean`
+/// on native Windows, otherwise `$XDG_CONFIG_HOME/clyean` or `~/.config/clyean`.
+pub fn config_dir() -> PathBuf {
+    if cfg!(windows) {
+        if let Some(dir) = std::env::var_os("APPDATA") {
+            return PathBuf::from(dir).join("clyean");
+        }
+    }
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir).join("clyean");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".config").join("clyean");
+    }
+    std::env::temp_dir().join("clyean-config")
+}
+
 /// Where Clyean caches downloads (the harness binary and the PlantUML jar).
 pub fn cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
@@ -514,6 +545,7 @@ mod tests {
                 ),
             host_paths: HostPathMapper::Identity,
             git_settings: vec![("core.autocrlf".into(), "input".into())],
+            host_config_dir: PathBuf::from("/home/skyei/.config/clyean"),
         }
     }
 
@@ -798,5 +830,26 @@ mod tests {
         assert!(run
             .windows(2)
             .any(|w| w[0] == "--approval-mode" && w[1] == "yolo"));
+    }
+
+    #[test]
+    fn a_workspace_holding_the_host_configuration_masks_it_in_every_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = context(dir.path());
+        let paths = context.container_paths();
+        assert!(context.host_state_masks(&paths).is_empty());
+        context.host_config_dir = context.directory.workspace().join(".config").join("clyean");
+        let mask = format!("{}/.config/clyean", paths.workspace_dir());
+        for role in [
+            user_assistant_role("/bridge"),
+            LaunchRole::SubAgent {
+                work_id: "w".into(),
+                secrets: Vec::new(),
+            },
+            LaunchRole::Maintenance,
+        ] {
+            let spec = context.agent_container_spec(AgentId::Programmer, role, Vec::new());
+            assert!(spec.tmpfs_mounts.contains(&mask), "{:?}", spec.tmpfs_mounts);
+        }
     }
 }
