@@ -218,6 +218,9 @@ dependencies = [
 name = "clyean-bridge"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "serde_json",
+ "socket2",
  "tempfile",
  "tokio",
 ]
@@ -254,6 +257,7 @@ dependencies = [
  "clyean-plantuml",
  "clyean-project",
  "clyean-sandbox",
+ "fd-lock",
  "regex",
  "serde",
  "serde_json",

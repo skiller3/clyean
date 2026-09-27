@@ -22,13 +22,18 @@ pub const CREDENTIALS: ManagedExtension = ManagedExtension {
     source: include_str!("../../../extensions/clyean-credentials.ts"),
 };
 
+pub const SERVERS: ManagedExtension = ManagedExtension {
+    file_name: "clyean-servers.ts",
+    source: include_str!("../../../extensions/clyean-servers.ts"),
+};
+
 /// The extensions installed for `agent`.  Only the User Assistant talks to Herdr and to
 /// the host orchestrator, and holds the sign-ins; every other agent imports and renews
-/// the copies it receives.
+/// the copies it receives, and asks the orchestrator for servers.
 pub fn managed_extensions(agent: AgentId) -> Vec<ManagedExtension> {
     match agent {
         AgentId::UserAssistant => vec![HERDR_REPORTER, ORCHESTRATION],
-        _ => vec![CREDENTIALS],
+        _ => vec![CREDENTIALS, SERVERS],
     }
 }
 
@@ -39,9 +44,13 @@ mod tests {
     #[test]
     fn embedded_extensions_carry_version_markers() {
         assert_eq!(HERDR_REPORTER.version(), Some(1));
-        assert_eq!(ORCHESTRATION.version(), Some(3));
+        assert_eq!(ORCHESTRATION.version(), Some(5));
         assert_eq!(CREDENTIALS.version(), Some(1));
+        assert_eq!(SERVERS.version(), Some(1));
         assert_eq!(managed_extensions(AgentId::UserAssistant).len(), 2);
-        assert_eq!(managed_extensions(AgentId::Programmer), [CREDENTIALS]);
+        assert_eq!(
+            managed_extensions(AgentId::Programmer),
+            [CREDENTIALS, SERVERS]
+        );
     }
 }

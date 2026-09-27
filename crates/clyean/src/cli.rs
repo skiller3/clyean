@@ -96,6 +96,8 @@ pub enum Command {
     Scaffold(ScaffoldArgs),
     /// Inspect or rebuild the project's Podman sandbox.
     Sandbox(SandboxArgs),
+    /// List or stop the project's server containers.
+    Server(ServerArgs),
     /// List the Clyean agents and their status.
     Agents,
     /// List the project's change plans.
@@ -149,11 +151,34 @@ pub enum SandboxAction {
     /// Open an interactive shell inside the sandbox.
     Shell,
     /// Remove User Assistant containers, in every project, whose clyean process is gone,
-    /// and list sandbox root filesystems whose project is gone.
+    /// stop the non-persistent servers those processes left, and list sandbox root
+    /// filesystems whose project is gone.
     Prune {
         /// Also remove the orphaned sandbox root filesystems.
         #[arg(long)]
         remove: bool,
+    },
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ServerArgs {
+    #[command(subcommand)]
+    pub action: ServerAction,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub enum ServerAction {
+    /// List the project's running server containers, how to reach them, and who asked
+    /// for them.
+    List,
+    /// Stop a server container, or every server container of the project.
+    Stop {
+        /// The server to stop.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        name: Option<String>,
+        /// Stop every server container of the project.
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -203,6 +228,36 @@ mod tests {
             cli.command,
             Some(Command::Sandbox(SandboxArgs {
                 action: SandboxAction::Prune { remove: true }
+            }))
+        ));
+    }
+
+    #[test]
+    fn server_stop_takes_a_name_or_all_but_not_both() {
+        let cli = Cli::try_parse_from(["clyean", "server", "stop", "web"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Server(ServerArgs {
+                action: ServerAction::Stop { name: Some(ref name), all: false }
+            })) if name == "web"
+        ));
+        let cli = Cli::try_parse_from(["clyean", "server", "stop", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Server(ServerArgs {
+                action: ServerAction::Stop {
+                    name: None,
+                    all: true
+                }
+            }))
+        ));
+        assert!(Cli::try_parse_from(["clyean", "server", "stop"]).is_err());
+        assert!(Cli::try_parse_from(["clyean", "server", "stop", "web", "--all"]).is_err());
+        let cli = Cli::try_parse_from(["clyean", "server", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Server(ServerArgs {
+                action: ServerAction::List
             }))
         ));
     }

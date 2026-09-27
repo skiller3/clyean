@@ -14,28 +14,36 @@ use anyhow::{Context, Result};
 use clyean_agents::profile::container_credentials_bundle_path;
 use clyean_agents::{AgentId, AgentNeeds};
 use clyean_harness::session::BoxFuture;
-use clyean_harness::{AgentSessionDriver, HarnessClient, HarnessSession, UiRequestHandler};
+use clyean_harness::{
+    AgentSessionDriver, HarnessClient, HarnessSession, UiRequestHandler, UiRequestHandlers,
+};
 use clyean_orchestrator::agents::AgentSessionFactory;
+use clyean_orchestrator::allowlist::RelayFile;
 use clyean_orchestrator::credentials::{plan_delivery, CredentialRenewals, Delivery};
 use clyean_orchestrator::scaffold::{
     ensure_sandbox, PendingScaffold, SandboxInputs, SandboxPreparation,
 };
-use clyean_orchestrator::service::DiagramRenderer;
-use clyean_orchestrator::CredentialAuthority;
+use clyean_orchestrator::servers::ServerRequests;
+use clyean_orchestrator::service::{DiagramRenderer, OrchestratorService, ProjectState};
+use clyean_orchestrator::{
+    CredentialAuthority, RelayManager, ServerManager, UserAssistantLease, WorkRegistry,
+};
 use clyean_plantuml::render::render_directory;
 use clyean_plantuml::RenderReport;
 use clyean_project::{
-    ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig, SandboxId,
+    LaunchId, ProjectConfig, ProjectDirectory, ProjectId, ProjectLayout, SandboxConfig, SandboxId,
 };
-use clyean_sandbox::launch::{cache_dir, BUILTIN_PASSTHROUGH_PATTERNS};
+use clyean_sandbox::launch::{cache_dir, config_dir, BUILTIN_PASSTHROUGH_PATTERNS};
 use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
     ContainerUser, HerdrHostContext, HostOs, HostPathMapper, LaunchContext, LaunchRole, Podman,
-    PodmanEnvironment, SandboxArchive, SandboxLocation, Topology,
+    PodmanEnvironment, ProjectNetwork, SandboxArchive, SandboxLocation, Topology,
 };
 
 use crate::cli::{ProjectArgs, YesNo, VERSION};
+use crate::relays::{BridgeRelayTransport, SystemBrowserOpener};
+use crate::servers::PodmanServerRuntime;
 
 const HARNESS_READY_TIMEOUT: Duration = Duration::from_secs(180);
 const SUB_AGENT_TURN_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
@@ -186,6 +194,30 @@ impl ProjectRuntime {
                     clyean_git::host_setting(key).map(|value| (key.to_string(), value))
                 })
                 .collect(),
+            host_config_dir: config_dir(),
+            network: None,
+        }
+    }
+
+    /// Creates the project network when missing and joins agents to it, printing why
+    /// agents cannot reach servers when it cannot be used.
+    pub fn attach_project_network(
+        &self,
+        context: &mut LaunchContext,
+        podman_sandbox: &PodmanSandbox,
+    ) {
+        let network = ProjectNetwork::for_project(&self.project_id);
+        match network.ensure(&self.podman, &self.project_id, &podman_sandbox.location.id) {
+            Ok(()) => context.network = Some(network),
+            Err(error) => eprintln!(
+                "warning: the project network could not be created ({error}); agents cannot reach server containers"
+            ),
+        }
+        for warning in clyean_sandbox::network::warnings(
+            &context.config.sandbox.podman_run_args,
+            podman_sandbox.environment.names_resolve,
+        ) {
+            eprintln!("warning: {warning}");
         }
     }
 
@@ -300,21 +332,74 @@ impl DiagramRenderer for SandboxRenderer {
     }
 }
 
-/// Opens sub-agent sessions as harness processes in their own sandbox containers, each
-/// with the credential copies and host variables it needs.
-pub struct SandboxSessionFactory {
-    context: LaunchContext,
-    credentials: Arc<CredentialAuthority>,
+/// The orchestrator's collaborators in one `clyean` process: the User Assistant's lease,
+/// the credential copies it hands out, the relays and server containers it decides, and the
+/// registry of running work whose sub-agents ask for them.
+pub struct Orchestration {
+    pub lease: Arc<UserAssistantLease>,
+    pub credentials: Arc<CredentialAuthority>,
+    pub transport: Arc<BridgeRelayTransport>,
+    pub relays: Arc<RelayManager>,
+    pub servers: Arc<ServerManager>,
+    pub registry: Arc<WorkRegistry>,
 }
 
-impl SandboxSessionFactory {
-    pub fn new(context: LaunchContext, credentials: Arc<CredentialAuthority>) -> Self {
+impl Orchestration {
+    /// The collaborators of the launch `launch_id` of the project `context` describes.
+    pub fn new(context: &LaunchContext, launch_id: &LaunchId) -> Self {
+        let lease = Arc::new(UserAssistantLease::default());
+        let transport = Arc::new(BridgeRelayTransport::default());
+        let relays = Arc::new(RelayManager::new(
+            context.directory.project().to_string_lossy(),
+            RelayFile::in_config_dir(&context.host_config_dir),
+            lease.clone(),
+            transport.clone(),
+            Arc::new(SystemBrowserOpener),
+        ));
+        let servers = Arc::new(ServerManager::new(
+            Arc::new(PodmanServerRuntime::new(context.clone())),
+            Some(relays.clone()),
+            launch_id.to_string(),
+        ));
         Self {
-            context,
-            credentials,
+            credentials: Arc::new(CredentialAuthority::new(lease.clone())),
+            lease,
+            transport,
+            relays,
+            servers,
+            registry: Arc::default(),
         }
     }
 
+    pub fn session_factory(&self, context: LaunchContext) -> Arc<SandboxSessionFactory> {
+        Arc::new(SandboxSessionFactory {
+            context,
+            credentials: self.credentials.clone(),
+            servers: self.servers.clone(),
+            registry: self.registry.clone(),
+        })
+    }
+
+    pub fn service(&self, state: ProjectState) -> OrchestratorService {
+        OrchestratorService::new(state, VERSION)
+            .with_registry(self.registry.clone())
+            .with_lease(self.lease.clone())
+            .with_relays(self.relays.clone())
+            .with_servers(self.servers.clone())
+    }
+}
+
+/// Opens sub-agent sessions as harness processes in their own sandbox containers, each
+/// with the credential copies and host variables it needs, and answers their requests for
+/// credential renewals and servers.
+pub struct SandboxSessionFactory {
+    context: LaunchContext,
+    credentials: Arc<CredentialAuthority>,
+    servers: Arc<ServerManager>,
+    registry: Arc<WorkRegistry>,
+}
+
+impl SandboxSessionFactory {
     async fn delivery(&self, agent: AgentId) -> clyean_orchestrator::Result<Delivery> {
         if !self.credentials.is_connected() {
             tracing::info!(target: "clyean::credentials", agent = agent.id(), "no User Assistant is running, so the agent receives the host's provider variables and no credential copies");
@@ -370,19 +455,27 @@ impl AgentSessionFactory for SandboxSessionFactory {
             let _ = self.context.podman.remove_container(&spec.name);
             let mut command = tokio::process::Command::new(self.context.podman.binary());
             command.args(spec.run_args());
-            let renewals: Option<Arc<dyn UiRequestHandler>> =
-                self.credentials.is_connected().then(|| {
-                    Arc::new(CredentialRenewals {
-                        authority: self.credentials.clone(),
-                        agent,
-                        providers: delivery.providers.clone(),
-                        mcp_servers: delivery.mcp_servers.clone(),
-                    }) as Arc<dyn UiRequestHandler>
-                });
+            let mut handlers: Vec<Arc<dyn UiRequestHandler>> = vec![Arc::new(ServerRequests {
+                servers: self.servers.clone(),
+                agent,
+                work_id: work_id.to_string(),
+                registry: self.registry.clone(),
+            })];
+            if self.credentials.is_connected() {
+                handlers.push(Arc::new(CredentialRenewals {
+                    authority: self.credentials.clone(),
+                    agent,
+                    providers: delivery.providers.clone(),
+                    mcp_servers: delivery.mcp_servers.clone(),
+                }));
+            }
             tracing::info!(target: "clyean::launch", agent = agent.id(), container = %spec.name, model = ?delivery.model, "starting sub-agent");
-            let client =
-                HarnessClient::spawn_with_ui_handler(command, HARNESS_READY_TIMEOUT, renewals)
-                    .await?;
+            let client = HarnessClient::spawn_with_ui_handler(
+                command,
+                HARNESS_READY_TIMEOUT,
+                Some(Arc::new(UiRequestHandlers(handlers))),
+            )
+            .await?;
             Ok(
                 Box::new(HarnessSession::new(client, SUB_AGENT_TURN_TIMEOUT))
                     as Box<dyn AgentSessionDriver>,

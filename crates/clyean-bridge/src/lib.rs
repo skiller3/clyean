@@ -12,11 +12,17 @@
 pub mod protocol;
 
 #[cfg(unix)]
+pub mod client;
+#[cfg(unix)]
 pub mod container;
 #[cfg(unix)]
 pub mod gate;
 #[cfg(feature = "host")]
 pub mod host;
+#[cfg(feature = "host")]
+pub mod relay;
+#[cfg(target_os = "linux")]
+pub mod sctp;
 
 /// Where the bridge executable is mounted, read-only, inside User Assistant containers.
 pub const CONTAINER_PATH: &str = "/usr/local/libexec/clyean/clyean-bridge";
@@ -27,6 +33,9 @@ pub const READY_FILE: &str = "/run/clyean/bridge.ready";
 
 /// The channel carrying the orchestrator protocol.
 pub const ORCHESTRATOR_CHANNEL: &str = "orchestrator";
+
+/// Where the orchestrator channel's socket is inside User Assistant containers.
+pub const ORCHESTRATOR_SOCKET: &str = "/run/clyean/orchestrator.sock";
 
 /// The channel carrying the Herdr socket API, passed through unmodified.
 pub const HERDR_CHANNEL: &str = "herdr";

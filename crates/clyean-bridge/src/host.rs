@@ -4,20 +4,22 @@
 //! The host end of the bridge.  It reads the frames the bridge writes to the standard
 //! output of its `podman exec` session, connects every stream the bridge opens to the
 //! host side of its channel through a [`Connector`], and writes the replies to the
-//! session's standard input.
+//! session's standard input.  Through a [`BridgeHandle`], the host also opens streams of
+//! its own, which the bridge connects to a port on the container's loopback.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 use crate::protocol::{
-    checked_length, is_bridge_stream, Frame, MAX_DATA, PROTOCOL_VERSION, STREAM_WINDOW,
+    checked_length, is_bridge_stream, Frame, Peer, MAX_DATA, MAX_HOST_STREAMS, PROTOCOL_VERSION,
+    STREAM_WINDOW,
 };
 
 /// The host side of one stream.
@@ -28,10 +30,18 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> LocalStream for T {}
 pub type ConnectFuture<'a> =
     Pin<Box<dyn Future<Output = io::Result<Box<dyn LocalStream>>> + Send + 'a>>;
 
-/// Opens the host side of a channel for each stream the bridge opens.  An error refuses
-/// the stream, which closes the connection inside the container.
+/// Opens the host side of a channel for each stream the bridge opens, knowing the process
+/// that connected inside the container when the bridge could tell.  An error refuses the
+/// stream, which closes the connection inside the container.
 pub trait Connector: Send + Sync + 'static {
-    fn connect<'a>(&'a self, channel: &'a str) -> ConnectFuture<'a>;
+    fn connect<'a>(&'a self, channel: &'a str, peer: Option<&'a Peer>) -> ConnectFuture<'a>;
+}
+
+/// What the host learns once the bridge has introduced itself: its release version, and
+/// the handle through which the host opens streams into the container.
+pub struct Introduction {
+    pub version: String,
+    pub handle: BridgeHandle,
 }
 
 /// Reads one frame, or `None` when the input ends.
@@ -49,13 +59,13 @@ pub async fn read_frame(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<Opt
 }
 
 /// Serves one bridge session until the bridge's output ends.  `introduced` receives the
-/// bridge's release version once its first frame proves it speaks this protocol; a bridge
-/// that speaks another one is refused.
+/// bridge's release version and a [`BridgeHandle`] once its first frame proves it speaks
+/// this protocol; a bridge that speaks another one is refused.
 pub async fn serve<R, W>(
     bridge_output: R,
     bridge_input: W,
     connector: Arc<dyn Connector>,
-    introduced: oneshot::Sender<String>,
+    introduced: oneshot::Sender<Introduction>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin + Send,
@@ -63,18 +73,44 @@ where
 {
     let mut reader = BufReader::new(bridge_output);
     let version = expect_hello(&mut reader).await?;
-    let _ = introduced.send(version);
     let (frames, outgoing) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_frames(bridge_input, outgoing));
     let session = Session {
         frames,
         streams: Arc::new(Mutex::new(HashMap::new())),
         connector,
+        next_host_stream: Arc::new(AtomicU32::new(2)),
     };
+    let _ = introduced.send(Introduction {
+        version,
+        handle: BridgeHandle {
+            session: session.clone(),
+        },
+    });
     let result = session.pump(&mut reader).await;
     session.close_all();
     writer.abort();
     result
+}
+
+/// Opens streams from the host into the container of one bridge session.
+#[derive(Clone)]
+pub struct BridgeHandle {
+    session: Session,
+}
+
+impl BridgeHandle {
+    /// Opens a stream on `channel`, such as `relay:tcp:3000`, and returns the host's end
+    /// of it.  The stream reads as ended when the bridge refuses it or the connection
+    /// inside the container ends.
+    pub fn open_stream(&self, channel: &str) -> io::Result<DuplexStream> {
+        self.session.open_host_stream(channel)
+    }
+
+    /// Whether the bridge session is still running.
+    pub fn is_open(&self) -> bool {
+        !self.session.frames.is_closed()
+    }
 }
 
 async fn expect_hello(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<String> {
@@ -116,6 +152,7 @@ struct Session {
     frames: mpsc::UnboundedSender<Frame>,
     streams: Arc<Mutex<HashMap<u32, Arc<HostStream>>>>,
     connector: Arc<dyn Connector>,
+    next_host_stream: Arc<AtomicU32>,
 }
 
 struct HostStream {
@@ -123,6 +160,7 @@ struct HostStream {
     credit: Credit,
     open_directions: AtomicU8,
     cancel: watch::Sender<bool>,
+    host_opened: bool,
 }
 
 enum Inbound {
@@ -134,9 +172,11 @@ impl Session {
     async fn pump(&self, reader: &mut (impl AsyncRead + Unpin)) -> io::Result<()> {
         while let Some(frame) = read_frame(reader).await? {
             match frame {
-                Frame::Open { stream, channel } if is_bridge_stream(stream) => {
-                    self.open(stream, channel)
-                }
+                Frame::Open {
+                    stream,
+                    channel,
+                    peer,
+                } if is_bridge_stream(stream) => self.open(stream, channel, peer),
                 Frame::Open { stream, .. } => {
                     let _ = self.frames.send(Frame::Close { stream });
                 }
@@ -154,22 +194,15 @@ impl Session {
         Ok(())
     }
 
-    fn open(&self, id: u32, channel: String) {
-        let (inbound, receiver) = mpsc::unbounded_channel();
-        let (cancel, cancelled) = watch::channel(false);
-        let entry = Arc::new(HostStream {
-            inbound,
-            credit: Credit::new(STREAM_WINDOW as usize),
-            open_directions: AtomicU8::new(2),
-            cancel,
-        });
+    fn open(&self, id: u32, channel: String, peer: Option<Peer>) {
+        let (entry, receiver, cancelled) = HostStream::new(false);
         self.streams
             .lock()
             .expect("bridge streams lock")
             .insert(id, entry.clone());
         let session = self.clone();
         tokio::spawn(async move {
-            match session.connector.connect(&channel).await {
+            match session.connector.connect(&channel, peer.as_ref()).await {
                 Ok(local) => {
                     session
                         .run_stream(id, entry, local, receiver, cancelled)
@@ -178,6 +211,52 @@ impl Session {
                 Err(_) => session.abort(id, true),
             }
         });
+    }
+
+    /// Registers a stream the host opens, asks the bridge to connect it, and serves it
+    /// through one end of an in-memory pipe whose other end the caller receives.
+    fn open_host_stream(&self, channel: &str) -> io::Result<DuplexStream> {
+        if self.frames.is_closed() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the bridge session has ended",
+            ));
+        }
+        let (entry, receiver, cancelled) = HostStream::new(true);
+        let id = {
+            let mut streams = self.streams.lock().expect("bridge streams lock");
+            if streams.values().filter(|stream| stream.host_opened).count() >= MAX_HOST_STREAMS {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    format!(
+                        "the host already has {MAX_HOST_STREAMS} streams open into the container"
+                    ),
+                ));
+            }
+            let id = self.next_host_stream.fetch_add(2, Ordering::SeqCst);
+            streams.insert(id, entry.clone());
+            id
+        };
+        let (caller_end, local_end) = tokio::io::duplex(STREAM_WINDOW as usize);
+        let opened = Frame::Open {
+            stream: id,
+            channel: channel.to_string(),
+            peer: None,
+        };
+        if self.frames.send(opened).is_err() {
+            self.abort(id, false);
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the bridge session has ended",
+            ));
+        }
+        let session = self.clone();
+        tokio::spawn(async move {
+            session
+                .run_stream(id, entry, Box::new(local_end), receiver, cancelled)
+                .await
+        });
+        Ok(caller_end)
     }
 
     async fn run_stream(
@@ -320,6 +399,27 @@ impl Session {
     }
 }
 
+impl HostStream {
+    fn new(
+        host_opened: bool,
+    ) -> (
+        Arc<Self>,
+        mpsc::UnboundedReceiver<Inbound>,
+        watch::Receiver<bool>,
+    ) {
+        let (inbound, receiver) = mpsc::unbounded_channel();
+        let (cancel, cancelled) = watch::channel(false);
+        let entry = Arc::new(Self {
+            inbound,
+            credit: Credit::new(STREAM_WINDOW as usize),
+            open_directions: AtomicU8::new(2),
+            cancel,
+            host_opened,
+        });
+        (entry, receiver, cancelled)
+    }
+}
+
 /// How many bytes the host may still send on a stream before the bridge returns credit.
 struct Credit {
     state: Mutex<CreditState>,
@@ -387,7 +487,7 @@ mod tests {
     struct EchoConnector;
 
     impl Connector for EchoConnector {
-        fn connect<'a>(&'a self, channel: &'a str) -> ConnectFuture<'a> {
+        fn connect<'a>(&'a self, channel: &'a str, _peer: Option<&'a Peer>) -> ConnectFuture<'a> {
             Box::pin(async move {
                 if channel != "echo" {
                     return Err(io::Error::new(io::ErrorKind::NotFound, "no such channel"));
@@ -418,12 +518,13 @@ mod tests {
         to_host: DuplexStream,
         from_host: DuplexStream,
         session: tokio::task::JoinHandle<io::Result<()>>,
+        introduced: Option<oneshot::Receiver<Introduction>>,
     }
 
     fn start() -> FakeBridge {
         let (to_host, host_reader) = duplex(1 << 20);
         let (host_writer, from_host) = duplex(1 << 20);
-        let (introduced, _) = oneshot::channel();
+        let (introduced, introduction) = oneshot::channel();
         let session = tokio::spawn(serve(
             host_reader,
             host_writer,
@@ -434,6 +535,7 @@ mod tests {
             to_host,
             from_host,
             session,
+            introduced: Some(introduction),
         }
     }
 
@@ -447,6 +549,14 @@ mod tests {
                 .await
                 .unwrap()
                 .expect("a frame")
+        }
+
+        /// Introduces the bridge and returns the host's handle.
+        async fn introduce(&mut self) -> BridgeHandle {
+            self.send(Frame::hello()).await;
+            let introduction = self.introduced.take().unwrap().await.unwrap();
+            assert_eq!(introduction.version, crate::VERSION);
+            introduction.handle
         }
     }
 
@@ -472,6 +582,7 @@ mod tests {
             .send(Frame::Open {
                 stream: 1,
                 channel: "echo".into(),
+                peer: None,
             })
             .await;
         bridge
@@ -505,6 +616,7 @@ mod tests {
             .send(Frame::Open {
                 stream: 3,
                 channel: "nowhere".into(),
+                peer: None,
             })
             .await;
         assert_eq!(bridge.next_frame().await, Frame::Close { stream: 3 });
@@ -512,9 +624,71 @@ mod tests {
             .send(Frame::Open {
                 stream: 4,
                 channel: "echo".into(),
+                peer: None,
             })
             .await;
         assert_eq!(bridge.next_frame().await, Frame::Close { stream: 4 });
+    }
+
+    #[tokio::test]
+    async fn host_opened_streams_use_even_ids_and_end_when_the_bridge_closes_them() {
+        let mut bridge = start();
+        let handle = bridge.introduce().await;
+        let mut local = handle.open_stream("relay:tcp:3000").unwrap();
+        assert_eq!(
+            bridge.next_frame().await,
+            Frame::Open {
+                stream: 2,
+                channel: "relay:tcp:3000".into(),
+                peer: None
+            }
+        );
+        local.write_all(b"hi").await.unwrap();
+        assert_eq!(
+            bridge.next_frame().await,
+            Frame::Data {
+                stream: 2,
+                bytes: b"hi".to_vec()
+            }
+        );
+        bridge
+            .send(Frame::Data {
+                stream: 2,
+                bytes: b"yo".to_vec(),
+            })
+            .await;
+        let mut reply = [0u8; 2];
+        local.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"yo");
+        assert_eq!(
+            bridge.next_frame().await,
+            Frame::Credit {
+                stream: 2,
+                bytes: 2
+            }
+        );
+        let _second = handle.open_stream("relay:udp:53").unwrap();
+        assert!(matches!(
+            bridge.next_frame().await,
+            Frame::Open { stream: 4, .. }
+        ));
+        bridge.send(Frame::Close { stream: 2 }).await;
+        let mut rest = Vec::new();
+        local.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_host_may_not_open_more_streams_than_its_share() {
+        let mut bridge = start();
+        let handle = bridge.introduce().await;
+        let mut streams = Vec::new();
+        for _ in 0..MAX_HOST_STREAMS {
+            streams.push(handle.open_stream("relay:tcp:3000").unwrap());
+        }
+        let refused = handle.open_stream("relay:tcp:3000").unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::WouldBlock);
+        assert!(handle.is_open());
     }
 
     #[tokio::test]
@@ -525,6 +699,7 @@ mod tests {
             .send(Frame::Open {
                 stream: 1,
                 channel: "echo".into(),
+                peer: None,
             })
             .await;
         drop(bridge.to_host);

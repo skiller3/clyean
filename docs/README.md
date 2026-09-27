@@ -11,6 +11,8 @@ The documentation follows [Diátaxis](https://diataxis.fr/): tutorials teach, ho
 
 - [Run Clyean inside Herdr](how-to/run-inside-herdr.md): what Clyean reports to Herdr, what it relays, and the sandboxing exception that implies.
 - [Configure agents](how-to/configure-agents.md): models, MCP servers, and instruction enhancements per agent, with local-only overrides.
+- [Sign in to providers](how-to/sign-in-to-providers.md): browser sign-ins through a relay, and the paste, API key, and device code alternatives.
+- [Relay ports and run servers](how-to/relay-ports-and-run-servers.md): open relays from your computer into the sandbox, run servers agents reach by name, keep them running, and allow relays in advance.
 - [Set up macOS](how-to/set-up-macos.md): the Podman machine Clyean needs on macOS, its size and provider, and where projects can live.
 - [Set up Windows](how-to/set-up-windows.md): the Podman machine Clyean needs on Windows, WSL's limits, Hyper-V, and where projects can live.
 - [Manage the sandbox](how-to/manage-the-sandbox.md): where each project's root filesystem lives; inspect, build, rebuild, prune, and enter the Podman sandbox; change the image, mounts, and harness binary.
@@ -27,7 +29,8 @@ The documentation follows [Diátaxis](https://diataxis.fr/): tutorials teach, ho
 - [Change plans](reference/change-plans.md): plan naming, versions, sections, and journals.
 - [Environment variables](reference/environment-variables.md): host-side variables that change Clyean's behavior.
 - [Sandbox contract](reference/sandbox-contract.md): the filesystem, mounts, and environment every agent can rely on inside its container.
-- [Orchestrator protocol](reference/orchestrator-protocol.md): the socket protocol between the User Assistant and the host orchestrator.
+- [Orchestrator protocol](reference/orchestrator-protocol.md): the socket protocol between the User Assistant and the host orchestrator, including relays and servers.
+- [Relay allowlist](reference/relay-allowlist.md): where the relay file lives, its schema, and how requests are matched against allowlist entries.
 
 ## Explanation
 

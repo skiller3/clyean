@@ -10,7 +10,7 @@ pub mod client;
 pub mod frames;
 pub mod session;
 
-pub use client::{HarnessClient, HarnessEvent, HarnessOutput, UiRequestHandler};
+pub use client::{HarnessClient, HarnessEvent, HarnessOutput, UiRequestHandler, UiRequestHandlers};
 pub use frames::{FrameDecoder, RpcFrame};
 pub use session::{AgentSessionDriver, HarnessSession, SessionInfo, TurnOutcome, TurnProgress};
 

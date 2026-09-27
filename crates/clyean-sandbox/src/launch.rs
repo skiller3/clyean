@@ -20,6 +20,7 @@ use crate::container::{
 };
 use crate::environment::{HostPathMapper, Topology};
 use crate::herdr::{self, HerdrHostContext};
+use crate::network::ProjectNetwork;
 use crate::roots::SandboxLocation;
 
 /// Labels that identify the User Assistant containers of every project.
@@ -49,6 +50,12 @@ pub struct LaunchContext {
     /// The host's Git settings that must hold inside containers too, such as
     /// `core.autocrlf`, so that files do not look modified on the other side.
     pub git_settings: Vec<(String, String)>,
+    /// Clyean's host configuration directory, which holds the relay file.  Every container
+    /// gets an empty filesystem over it when the workspace contains it.
+    pub host_config_dir: PathBuf,
+    /// The project network that the User Assistant's and sub-agents' containers join,
+    /// once it exists.
+    pub network: Option<ProjectNetwork>,
 }
 
 /// How an agent participates in work, which decides its interactivity and identity.
@@ -130,17 +137,32 @@ impl LaunchContext {
         agent: AgentId,
         role: &LaunchRole,
     ) -> (Vec<MountSpec>, Vec<String>) {
-        let user = self.user.name();
-        let masks = vec![
-            format!("/home/{user}/.omp/profiles"),
-            format!("/home/{user}/.omp/agent"),
-        ];
+        let masks = self.profile_masks();
         if matches!(role, LaunchRole::Maintenance) {
             return (Vec::new(), masks);
         }
-        let profile = container_profile_root(user, agent);
+        let profile = container_profile_root(self.user.name(), agent);
         let own_profile = MountSpec::read_write(format!("{}{profile}", self.sandbox.root), profile);
         (vec![own_profile], masks)
+    }
+
+    /// The paths that hold login stores: every agent's profile and `~/.omp/agent`.
+    pub(crate) fn profile_masks(&self) -> Vec<String> {
+        let user = self.user.name();
+        vec![
+            format!("/home/{user}/.omp/profiles"),
+            format!("/home/{user}/.omp/agent"),
+        ]
+    }
+
+    /// Empty filesystems over the host directories of Clyean's own state that the workspace
+    /// contains, such as its configuration directory when the workspace is the home
+    /// directory, so that nothing in the sandbox reads or edits them.
+    pub fn host_state_masks(&self, paths: &ContainerPaths) -> Vec<String> {
+        paths
+            .translate_host_path(&self.host_config_dir)
+            .into_iter()
+            .collect()
     }
 
     /// The names and patterns of the host variables `agent` receives in `role`: the User
@@ -168,24 +190,9 @@ impl LaunchContext {
     fn shared_environment(&self, agent: AgentId, paths: &ContainerPaths) -> Vec<(String, String)> {
         let mut env = vec![
             ("CLYEAN_AGENT".to_string(), agent.id().to_string()),
-            ("CLYEAN_VERSION".to_string(), self.clyean_version.clone()),
-            (
-                "CLYEAN_PROJECT_DIR".to_string(),
-                paths.project_dir().to_string(),
-            ),
-            (
-                "CLYEAN_WORKSPACE_DIR".to_string(),
-                paths.workspace_dir().to_string(),
-            ),
-            (
-                "CLYEAN_HOST_WORKSPACE_DIR".to_string(),
-                self.directory.workspace().to_string_lossy().into_owned(),
-            ),
-            ("HOME".to_string(), self.user.home()),
             ("OMP_PROFILE".to_string(), agent.id().to_string()),
-            ("LANG".to_string(), "C.UTF-8".to_string()),
         ];
-        env.extend(self.git_environment(paths));
+        env.extend(self.common_environment(paths));
         // Herdr, on this host, can open the root filesystem's files only when it lives on
         // this host's kernel.
         if self.sandbox.topology == Topology::SharedKernel {
@@ -201,6 +208,30 @@ impl LaunchContext {
                 .into_iter()
                 .map(|(key, value)| (key.to_string(), value)),
         );
+        env
+    }
+
+    /// The variables of every container, agent or server: Clyean's version, the workspace
+    /// and project paths, the home directory, the locale, and Git's configuration.
+    pub(crate) fn common_environment(&self, paths: &ContainerPaths) -> Vec<(String, String)> {
+        let mut env = vec![
+            ("CLYEAN_VERSION".to_string(), self.clyean_version.clone()),
+            (
+                "CLYEAN_PROJECT_DIR".to_string(),
+                paths.project_dir().to_string(),
+            ),
+            (
+                "CLYEAN_WORKSPACE_DIR".to_string(),
+                paths.workspace_dir().to_string(),
+            ),
+            (
+                "CLYEAN_HOST_WORKSPACE_DIR".to_string(),
+                self.directory.workspace().to_string_lossy().into_owned(),
+            ),
+            ("HOME".to_string(), self.user.home()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+        ];
+        env.extend(self.git_environment(paths));
         env
     }
 
@@ -233,8 +264,9 @@ impl LaunchContext {
     ) -> AgentContainerSpec {
         let paths = self.container_paths();
         let mut mounts = self.shared_mounts(&paths);
-        let (profile_mounts, tmpfs_mounts) = self.profile_isolation(agent, &role);
+        let (profile_mounts, mut tmpfs_mounts) = self.profile_isolation(agent, &role);
         mounts.extend(profile_mounts);
+        tmpfs_mounts.extend(self.host_state_masks(&paths));
         let mut environment =
             select_host_variables(std::env::vars(), &self.secret_patterns(agent, &role));
         environment.extend(self.shared_environment(agent, &paths));
@@ -251,6 +283,14 @@ impl LaunchContext {
             environment,
             tty: false,
             remove_on_exit: true,
+            network: match role {
+                LaunchRole::Maintenance => None,
+                _ => self
+                    .network
+                    .as_ref()
+                    .map(|network| network.name().to_string()),
+            },
+            network_aliases: Vec::new(),
             extra_run_args: self.config.sandbox.podman_run_args.clone(),
             command,
             detach_keys: match self.sandbox.topology {
@@ -459,6 +499,23 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// Where Clyean keeps host-only configuration, such as the relay file: `%APPDATA%\clyean`
+/// on native Windows, otherwise `$XDG_CONFIG_HOME/clyean` or `~/.config/clyean`.
+pub fn config_dir() -> PathBuf {
+    if cfg!(windows) {
+        if let Some(dir) = std::env::var_os("APPDATA") {
+            return PathBuf::from(dir).join("clyean");
+        }
+    }
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir).join("clyean");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".config").join("clyean");
+    }
+    std::env::temp_dir().join("clyean-config")
+}
+
 /// Where Clyean caches downloads (the harness binary and the PlantUML jar).
 pub fn cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CACHE_HOME") {
@@ -514,6 +571,8 @@ mod tests {
                 ),
             host_paths: HostPathMapper::Identity,
             git_settings: vec![("core.autocrlf".into(), "input".into())],
+            host_config_dir: PathBuf::from("/home/skyei/.config/clyean"),
+            network: Some(ProjectNetwork::for_project(&ProjectId::of(Path::new("/p")))),
         }
     }
 
@@ -798,5 +857,45 @@ mod tests {
         assert!(run
             .windows(2)
             .any(|w| w[0] == "--approval-mode" && w[1] == "yolo"));
+    }
+
+    #[test]
+    fn a_workspace_holding_the_host_configuration_masks_it_in_every_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut context = context(dir.path());
+        let paths = context.container_paths();
+        assert!(context.host_state_masks(&paths).is_empty());
+        context.host_config_dir = context.directory.workspace().join(".config").join("clyean");
+        let mask = format!("{}/.config/clyean", paths.workspace_dir());
+        for role in [
+            user_assistant_role("/bridge"),
+            LaunchRole::SubAgent {
+                work_id: "w".into(),
+                secrets: Vec::new(),
+            },
+            LaunchRole::Maintenance,
+        ] {
+            let spec = context.agent_container_spec(AgentId::Programmer, role, Vec::new());
+            assert!(spec.tmpfs_mounts.contains(&mask), "{:?}", spec.tmpfs_mounts);
+        }
+    }
+
+    #[test]
+    fn agents_join_the_project_network_and_maintenance_containers_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = context(dir.path());
+        let network = context.network.as_ref().unwrap().name().to_string();
+        let joined = |role: LaunchRole| {
+            let spec = context.agent_container_spec(AgentId::Programmer, role, Vec::new());
+            let args = spec.run_args();
+            args.windows(2)
+                .any(|pair| pair[0] == "--network" && pair[1] == network)
+        };
+        assert!(joined(user_assistant_role("/bridge")));
+        assert!(joined(LaunchRole::SubAgent {
+            work_id: "w".into(),
+            secrets: Vec::new(),
+        }));
+        assert!(!joined(LaunchRole::Maintenance));
     }
 }

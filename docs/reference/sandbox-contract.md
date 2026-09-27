@@ -29,14 +29,48 @@ Every invocation of `clyean` starts exactly one User Assistant, in a container o
 | Command | `/usr/local/libexec/clyean/clyean-bridge await --ready-file /run/clyean/bridge.ready -- /usr/local/bin/clyean <harness arguments>` |
 | Terminal | Allocated for interactive launches, not for print mode. |
 
-The container reaches its `clyean` process only through the bridge: once the container runs, `clyean` opens one `podman exec --interactive` session running `clyean-bridge bridge`, and multiplexes every connection to the bridge's sockets over the session's standard input and output.  The bridge serves two channels:
+The container reaches its `clyean` process only through the bridge: once the container runs, `clyean` opens one `podman exec --interactive` session running `clyean-bridge bridge`, and multiplexes every connection to the bridge's sockets over the session's standard input and output.  The bridge speaks protocol version 2 and serves two channels:
 
 - `orchestrator`, at `/run/clyean/orchestrator.sock`, carrying the orchestrator protocol and nothing else.
 - `herdr`, at `/run/herdr/herdr.sock`, relaying the host Herdr socket unmodified, only when `clyean` runs inside a Herdr pane.
 
+Streams in the other direction carry relays.  For each connection, UDP flow, or SCTP association that reaches a relay's host listener, `clyean` opens a stream on the channel `relay:<tcp|udp|sctp>:<guest port>`, and the bridge connects it to the guest port on the container's loopback, `127.0.0.1` first and `::1` when IPv4 refuses.  The bridge accepts host-opened streams on no other channel.  TCP streams carry bytes with half-close preserved; UDP and SCTP streams carry messages, each framed as a 32-bit length, a 16-bit SCTP stream number, a 32-bit payload protocol identifier (both zero for UDP), and the payload.  Streams the bridge opens for its own channels carry the connecting process's pid and command line, which it reads with `SO_PEERCRED` and `/proc`.  At most 256 streams are open at once, of which relays may use 224.
+
 The container's command is a start gate: it waits until the bridge creates `/run/clyean/bridge.ready`, which it does once both sockets accept connections, and then replaces itself with the harness, so the harness never runs without its bridge and is still the only child of init.  If the bridge is not ready within 30 seconds, the gate exits with status 125 and the container ends before the harness starts.
 
-The User Assistant's orchestration extension holds a lease: one `session.lease` connection to the orchestrator for the life of the harness process.  When the `clyean` process ends for any reason, the session's input closes, the bridge exits, the lease connection ends, and the extension shuts the harness down, after which Podman removes the container.  A harness that has stopped responding cannot act on the lease; `clyean sandbox prune` removes such containers (see [the command-line reference](cli.md)).
+The User Assistant's orchestration extension holds a lease: one `session.lease` connection to the orchestrator for the life of the harness process, and the only one the bridge session grants.  When the `clyean` process ends for any reason, the session's input closes, the bridge exits, the lease connection ends, and the extension shuts the harness down, after which Podman removes the container.  A harness that has stopped responding cannot act on the lease; `clyean sandbox prune` removes such containers (see [the command-line reference](cli.md)).
+
+The bridge executable is also a command-line client of the orchestrator socket for scripts in the container.  Each command sends one request and prints its result, or its error, as one line of JSON, exiting with status 1 on an error:
+
+```
+clyean-bridge relay open PROTOCOL HOST_PORT GUEST_PORT [--host-address ADDRESS]... [--reason TEXT]
+clyean-bridge relay close RELAY_ID
+clyean-bridge relay list
+clyean-bridge server launch NAME --port PROTOCOL/PORT... [--relay PROTOCOL:HOST_PORT:GUEST_PORT[@ADDRESS,...]]...
+                    [--cwd DIR] [--persistent] [--ready-timeout SECONDS] [--reason TEXT] -- COMMAND...
+clyean-bridge server stop NAME
+clyean-bridge server list
+```
+
+The words after `--` are joined with spaces into the shell command the server runs.
+
+## Project network
+
+Every project has one Podman network, `clyean-<project-id>`, created with `--opt isolate=true` and the labels `clyean.project=<project-id>` and `clyean.sandbox=<sandbox-id>`.  User Assistant, sub-agent, and server containers run with `--network clyean-<project-id>`; maintenance and helper containers do not.  Server containers also get `--network-alias <server name>`, which members resolve through aardvark-dns.  Networks of different projects cannot reach each other, and no member reaches the host's loopback.
+
+## Server containers
+
+| Property | Value |
+| --- | --- |
+| Name | `clyean-<project-id>-server-<name>` |
+| Network | `--network clyean-<project-id> --network-alias <name>` |
+| Labels | `clyean.sandbox=<sandbox-id>`, `clyean.project=<project-id>`, `clyean.role=server`, `clyean.server=<name>`, `clyean.launch=<launch-id of the launching clyean process>`, `clyean.persistent=<true or false>`, `clyean.requested-by=<agent-id>`, and `clyean.server-definition`, the launch's command, directory, ports, and relays as JSON |
+| Run options | `--detach --rm --init`, the shared mounts, the working directory the launch named (inside the workspace), one `--publish <host address>:<host port>:<guest port>/<protocol>` per approved relay and host address, then `sandbox.podmanRunArgs` |
+| Command | `/bin/sh -c <wrapper> <log path> <command>`: the wrapper runs the command with `sh -c`, sends its output to `.clyean/logs/servers/<name>.log` in the project (truncated by each launch), passes stop signals to every process of the command, and ends the log with `[clyean] the server's command exited with status <n>` |
+| Login stores | None: `/home/<user>/.omp/profiles` and `/home/<user>/.omp/agent` are empty |
+| Host variables | None |
+
+A launch probes the container about twice a second with `podman container inspect` (its state and network addresses) and `podman exec`, which reads `/proc/net/tcp`, `tcp6`, `udp`, `udp6`, and `sctp/eps`.
 
 ## Fixed paths inside the container
 
@@ -66,6 +100,7 @@ Some directories get a private, empty `tmpfs` in each container, so that no cont
 | `/home/<user>/.omp/run` and `/home/<user>/.omp/profiles/<agent-id>/run`, where the harness keeps the sockets of its daemons | User Assistant and sub-agents |
 | `/home/<user>/.omp/profiles`, with the container's own agent's profile directory bind-mounted back from the root filesystem at `/home/<user>/.omp/profiles/<agent-id>` | User Assistant and sub-agents; maintenance containers get the empty directory only |
 | `/home/<user>/.omp/agent`, which no profile reads | every container |
+| Clyean's host configuration directory, which holds the relay file, when the workspace contains it (for example when the workspace is the home directory) | every container |
 
 Files that every profile reads, such as `~/.env` in the sandbox home, stay shared.  Clyean never writes one, and secrets do not belong there.
 
@@ -76,17 +111,19 @@ Agent processes run as UID 0 inside the container.  Under rootless Podman that U
 | Variable | Value | Present in |
 | --- | --- | --- |
 | `CLYEAN_AGENT` | The agent identifier (see below). | all agents |
-| `CLYEAN_VERSION` | Version of the `clyean` host program that launched the container.  The User Assistant's welcome box shows it. | all agents |
-| `CLYEAN_PROJECT_DIR` | Absolute container path of the project directory. | all agents |
-| `CLYEAN_WORKSPACE_DIR` | Absolute container path of the workspace mount. | all agents |
-| `CLYEAN_HOST_WORKSPACE_DIR` | Absolute host path of the workspace directory. | all agents |
+| `CLYEAN_SERVER` | The server's name. | server containers |
+| `CLYEAN_VERSION` | Version of the `clyean` host program that launched the container.  The User Assistant's welcome box shows it. | all agents and server containers |
+| `CLYEAN_PROJECT_DIR` | Absolute container path of the project directory. | all agents and server containers |
+| `CLYEAN_WORKSPACE_DIR` | Absolute container path of the workspace mount. | all agents and server containers |
+| `CLYEAN_HOST_WORKSPACE_DIR` | Absolute host path of the workspace directory. | all agents and server containers |
 | `CLYEAN_HOST_CONTAINER_ROOT` | Absolute host path of the sandbox root filesystem.  Unset on a Podman machine, whose root filesystem this host cannot open. | all agents on Linux and Linux on WSL |
-| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | Git settings for every Git command in the container: the host's global `core.autocrlf` and `core.eol` when set, and the workspace and project directories as `safe.directory`, so a checkout on a shared filesystem neither looks modified nor is refused as owned by another user. | all agents |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | Git settings for every Git command in the container: the host's global `core.autocrlf` and `core.eol` when set, and the workspace and project directories as `safe.directory`, so a checkout on a shared filesystem neither looks modified nor is refused as owned by another user. | all agents and server containers |
 | `CLYEAN_WORK_ID` | Identifier of the unit of work the agent was started for. | sub-agents |
 | `CLYEAN_CREDENTIALS_BUNDLE` | Path of the agent's credential bundle file (see "Credentials"). | sub-agents |
 | `CLYEAN_ORCHESTRATOR_SOCKET` | `/run/clyean/orchestrator.sock` | User Assistant |
 | `CLYEAN_ORCHESTRATOR_LEASE` | `1`: hold the orchestrator lease and shut down when it ends. | User Assistant |
-| `HOME` | `/home/<user>` | all agents |
+| `HOME` | `/home/<user>` | all agents and server containers |
+| `LANG` | `C.UTF-8` | all agents and server containers |
 | `OMP_PROFILE` | The agent identifier, selecting the agent's harness profile. | all agents |
 | `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` | `Clyean <Agent Display Name>` | all agents |
 | `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` | `<agent-id>@agents.clyean.com` | all agents |
@@ -120,7 +157,7 @@ Host variables reach agents as follows:
 | --- | --- |
 | User Assistant | Names matching `*_API_KEY`, `*_API_TOKEN`, or `*_BASE_URL`, the AWS, Azure OpenAI, and Google Cloud credential variables, and every `sandbox.passthroughEnv` entry written as a string |
 | Sub-agent | The variables the harness reads for its models' providers, and every `sandbox.passthroughEnv` entry written as an object that lists the agent |
-| Maintenance container | None |
+| Maintenance or server container | None |
 
 The harness's auth broker variables never pass through on their own.  `clyean scaffold --project-type` starts the Scaffolder without a User Assistant; it then receives the User Assistant's host variables and an empty bundle, which clears copies from earlier runs.
 
@@ -143,17 +180,20 @@ Before an agent container starts, the host projects the agent's configuration in
 
 - `.clyean/agents/AGENTS__<NAME>.md` followed by `.clyean/agents/AGENTS__<NAME>.local.md` (when present) becomes `/home/<user>/.omp/profiles/<agent-id>/agent/AGENTS.md`.
 - `.clyean/agents/<NAME>.omp.json` deep-merged with `.clyean/agents/<NAME>.omp.local.json` (when present) becomes `/home/<user>/.omp/profiles/<agent-id>/agent/settings.json`.  The file uses the harness's own settings schema, so MCP servers, models, and tool settings are scoped to the agent that owns the file.
-- The Clyean-managed extensions are written to the profile's `extensions/` directory: the Herdr reporter and the orchestration extension for the User Assistant, and the credentials extension for every other agent.  Each carries a `CLYEAN_EXTENSION_VERSION` marker and is overwritten whenever the marker is behind the running `clyean` version.
+- The Clyean-managed extensions are written to the profile's `extensions/` directory: the Herdr reporter and the orchestration extension for the User Assistant, and the credentials and servers extensions for every other agent.  Each carries a `CLYEAN_EXTENSION_VERSION` marker and is overwritten whenever the marker is behind the running `clyean` version.
+
+A sub-agent's servers extension asks for servers with extension UI requests titled `clyean:server`, whose placeholder is the JSON of the request (`{"action": "launch", ...}` with the parameters of [`server.launch`](orchestrator-protocol.md#serverlaunch), `{"action": "stop", "name": ...}`, or `{"action": "list"}`), with a thirty-minute timeout.  The orchestrator answers with the method's result as JSON, or with `{"error": {"code", "message", "reason"}}`.
 
 ## Git identity of commits
 
 Every commit made by Clyean, whether by deterministic logic on the host or by an agent inside a container, uses the author identity shown in the agent table and ends its message with the trailer `Clyean-Agent: <agent-id>`.  Commits made by host logic on behalf of the orchestrator use the identity of the Software Engineering Director.
 
-## Sanctioned routes out of the sandbox
+## Sanctioned routes across the sandbox boundary
 
-Two features deliberately let an agent affect state outside the workspace mount and are documented as such:
+Three features deliberately cross the sandbox boundary and are documented as such:
 
 1. The Herdr channel the bridge relays into the User Assistant container grants the full Herdr socket API, including workspace, tab, and pane mutation and control of panes that do not belong to the project.
 2. Remote repository access by the Software Engineering Director agent, once it is implemented.
+3. Relays, the only inbound route: each carries traffic from host addresses into the User Assistant's container or a server container, and each is approved by the user or covered by the user's allowlist (see [the relay allowlist reference](relay-allowlist.md)).
 
-No other mount is writable, and no host socket is mounted: the bridge's channels are the only connections from a container to its `clyean` process.
+No other mount is writable, and no host socket is mounted: the bridge's channels and relay streams are the only connections between a container and its `clyean` process, and a server container's relays are ports that Podman publishes.

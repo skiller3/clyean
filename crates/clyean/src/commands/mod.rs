@@ -5,6 +5,7 @@ mod inspect;
 mod launch;
 mod sandbox;
 mod scaffold;
+mod server;
 
 use crate::cli::{Cli, Command};
 
@@ -13,6 +14,7 @@ pub async fn run(cli: Cli) -> i32 {
         None => launch::run(&cli.project, cli.launch).await,
         Some(Command::Scaffold(args)) => scaffold::run(&cli.project, args).await,
         Some(Command::Sandbox(args)) => sandbox::run(&cli.project, args).await,
+        Some(Command::Server(args)) => server::run(&cli.project, args).await,
         Some(Command::Agents) => inspect::agents(&cli.project),
         Some(Command::Plans) => inspect::plans(&cli.project),
         Some(Command::Work) => inspect::work(&cli.project),

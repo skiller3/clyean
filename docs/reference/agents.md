@@ -37,7 +37,9 @@ The orchestrator sends one instruction per step and reads a verdict from the las
 
 ### User Assistant
 
-Talks to you, classifies each prompt (`project_type`, then `prompt_type`), handles `MISCELLANEOUS` prompts itself, and delegates the three software engineering prompt types through the tools `clyean_status`, `clyean_scaffold`, `clyean_delegate`, `clyean_provide_information`, `clyean_resume`, and `clyean_cancel`.  The `/clyean` slash command shows project status.  It does not answer with verdicts; it relays.
+Talks to you, classifies each prompt (`project_type`, then `prompt_type`), handles `MISCELLANEOUS` prompts itself, and delegates the three software engineering prompt types through the tools `clyean_status`, `clyean_scaffold`, `clyean_delegate`, `clyean_provide_information`, `clyean_resume`, and `clyean_cancel`.  It relays ports into its own container with `clyean_relay` and runs server containers with `clyean_server`.  The `/clyean` slash command shows project status; `/clyean relays` and `/clyean servers` manage relays, allowlists, and servers.  It does not answer with verdicts; it relays.
+
+Every other agent has a `clyean_server` tool of its own, with which it runs servers that it and other agents reach by name on the project network (see [Relay ports and run servers](../how-to/relay-ports-and-run-servers.md)).
 
 ### Scaffolder
 
@@ -71,6 +73,6 @@ Before an agent starts, Clyean writes into `/home/<user>/.omp/profiles/<identifi
 - `AGENTS.md`: the baseline plus the local enhancement.
 - `clyean-overlay.json`: the merged settings overlay, passed with `--config`.
 - `mcp.json`: the existing file deep-merged with the merged MCP seed.
-- `extensions/clyean-herdr-reporter.ts` and `extensions/clyean-orchestration.ts`: for the User Assistant only, refreshed when their `CLYEAN_EXTENSION_VERSION` marker is behind the embedded copy.
+- `extensions/clyean-herdr-reporter.ts` and `extensions/clyean-orchestration.ts` for the User Assistant, and `extensions/clyean-credentials.ts` and `extensions/clyean-servers.ts` for every other agent, each refreshed when its `CLYEAN_EXTENSION_VERSION` marker is behind the embedded copy.
 
 Sub-agents are started with `--mode rpc --approval-mode yolo --no-title` and, when resuming, `--resume <session file>`.

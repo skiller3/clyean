@@ -26,6 +26,8 @@ const TOOL_NAMES = [
 	"clyean_provide_information",
 	"clyean_resume",
 	"clyean_cancel",
+	"clyean_relay",
+	"clyean_server",
 ];
 
 const sandbox = environmentSandbox();

@@ -6,14 +6,20 @@
 //! sessions, and journals every unit of work so that it can be resumed.
 
 pub mod agents;
+pub mod allowlist;
 pub mod credentials;
 pub mod events;
 pub mod journal;
+pub mod lease;
 pub mod prompts;
 pub mod protocol;
+pub mod relays;
 pub mod scaffold;
 pub mod server;
+pub mod servers;
 pub mod service;
+#[cfg(test)]
+mod test_support;
 pub mod verdict;
 pub mod work;
 pub mod workflows;
@@ -21,7 +27,10 @@ pub mod workflows;
 pub use agents::{AgentSessionFactory, SubAgentPool};
 pub use credentials::CredentialAuthority;
 pub use journal::{Phase, WorkJournal, WorkKind, WorkStatus};
+pub use lease::UserAssistantLease;
 pub use protocol::{PromptType, Request, Response, StreamedEvent};
+pub use relays::RelayManager;
+pub use servers::ServerManager;
 pub use service::{OrchestratorService, ProjectServices};
 pub use work::{WorkId, WorkRegistry};
 

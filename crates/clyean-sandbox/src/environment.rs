@@ -117,6 +117,9 @@ pub struct PodmanEnvironment {
     pub memory_bytes: u64,
     /// The Podman machine's provider, on native Windows and macOS.
     pub provider: Option<String>,
+    /// Whether containers on user-defined networks resolve each other's names, which
+    /// needs aardvark-dns.
+    pub names_resolve: bool,
 }
 
 impl PodmanEnvironment {
@@ -171,6 +174,10 @@ impl PodmanEnvironment {
             cpus: host["cpus"].as_u64().unwrap_or(0),
             memory_bytes: host["memTotal"].as_u64().unwrap_or(0),
             provider: None,
+            names_resolve: host
+                .pointer("/networkBackendInfo/dns/package")
+                .and_then(Value::as_str)
+                .is_some_and(|package| !package.is_empty()),
         })
     }
 
@@ -325,6 +332,21 @@ mod tests {
         .unwrap();
         environment.provider = Some(provider.to_string());
         environment
+    }
+
+    #[test]
+    fn name_resolution_needs_aardvark_dns() {
+        let without = PodmanEnvironment::from_reports(LOCAL_INFO, LOCAL_VERSION).unwrap();
+        assert!(!without.names_resolve);
+        let with = LOCAL_INFO.replace(
+            r#""serviceIsRemote": false,"#,
+            r#""serviceIsRemote": false, "networkBackendInfo": {"backend": "netavark", "dns": {"package": "aardvark-dns_1.16.0-3_amd64"}},"#,
+        );
+        assert!(
+            PodmanEnvironment::from_reports(&with, LOCAL_VERSION)
+                .unwrap()
+                .names_resolve
+        );
     }
 
     #[test]

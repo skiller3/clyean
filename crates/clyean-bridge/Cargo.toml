@@ -9,17 +9,24 @@ repository.workspace = true
 authors.workspace = true
 
 # The container end is a small static Linux executable (built for the musl targets), so
-# its default build depends on nothing but the standard library.  The `host` feature adds
-# the asynchronous host end that the clyean command line runs.
+# its default build depends only on the standard library, libc, and serde_json, which its
+# command-line client of the orchestrator socket reads replies with.  The `host` feature
+# adds the asynchronous host end, and the relay listeners, that the clyean command line
+# runs.
 [[bin]]
 name = "clyean-bridge"
 path = "src/main.rs"
 
 [features]
-host = ["dep:tokio"]
+host = ["dep:tokio", "dep:socket2"]
 
 [dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true, optional = true }
+socket2 = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

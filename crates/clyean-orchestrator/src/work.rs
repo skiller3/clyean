@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
+use crate::journal::Phase;
 use crate::protocol::StreamedEvent;
 
 const EVENT_CAPACITY: usize = 1024;
@@ -54,6 +55,8 @@ pub struct WorkHandle {
     pub cancellation: CancellationToken,
     sequence: Arc<AtomicU64>,
     last_information_request: Arc<Mutex<Option<StreamedEvent>>>,
+    /// The phase the work last recorded, for events published from outside its workflow.
+    phase: Arc<std::sync::Mutex<Phase>>,
 }
 
 impl WorkHandle {
@@ -67,8 +70,17 @@ impl WorkHandle {
             cancellation: CancellationToken::new(),
             sequence: Arc::new(AtomicU64::new(0)),
             last_information_request: Arc::new(Mutex::new(None)),
+            phase: Arc::new(std::sync::Mutex::new(Phase::Pending)),
         };
         (handle, answer_rx)
+    }
+
+    pub fn record_phase(&self, phase: Phase) {
+        *self.phase.lock().expect("unpoisoned") = phase;
+    }
+
+    pub fn phase(&self) -> Phase {
+        *self.phase.lock().expect("unpoisoned")
     }
 
     pub fn next_sequence(&self) -> u64 {

@@ -8,8 +8,12 @@ Variables read by the `clyean` host program.  The variables an agent sees inside
 | `CLYEAN_BRIDGE_BINARY` | Path of the static Linux bridge executable to mount into User Assistant containers, taking precedence over a `clyean-bridge-linux-<arch>` or `clyean-bridge` file beside the `clyean` executable and the release download (`clyean-bridge-linux-<arch>` of the running version, verified against `SHA256SUMS` and cached).  `cargo build-bridge` installs one beside `bin/clyean` for development builds. |
 | `CLYEAN_LOG` | A `tracing` filter for diagnostics on standard error, for example `info` or `clyean::orchestrator=debug`.  `--verbose` sets `info` when the variable is unset; the default is `warn`. |
 | `CLYEAN_PODMAN_TESTS` | Set to `1` to run the Podman-backed integration tests of the Rust workspace (used by CI).  They also need `CLYEAN_BRIDGE_BINARY`, and `CLYEAN_TEST_IMAGE` overrides the image they populate a test root filesystem from (default `docker.io/library/alpine:3.22`). |
+| `CLYEAN_SCTP_TESTS` | Set to `1` to run the bridge's SCTP round-trip test, which makes the kernel load its SCTP module. |
 | `XDG_CACHE_HOME` | When set, downloads (the harness binary, the bridge, and the PlantUML jar) are cached under `$XDG_CACHE_HOME/clyean/`; otherwise under `~/.cache/clyean/`. |
-| `HOME` | Used for the default cache location. |
+| `XDG_CONFIG_HOME` | When set (and not on native Windows), Clyean's host configuration directory, which holds the [relay file](relay-allowlist.md), is `$XDG_CONFIG_HOME/clyean`; otherwise `~/.config/clyean`. |
+| `APPDATA` | On native Windows, Clyean's host configuration directory is `%APPDATA%\clyean`. |
+| `HOME` | Used for the default cache and configuration locations. |
+| `WSL_DISTRO_NAME` | Inside WSL, sign-in pages open with `wslview` when it is installed and with Windows' `explorer.exe` otherwise, instead of `xdg-open`. |
 | `USER`, `USERNAME` | The host user name, sanitized into the sandbox user name (`/home/<name>`).  Falls back to `clyean`. |
 | `TERM`, `COLORTERM`, `TERM_PROGRAM` | Copied into the User Assistant container so the terminal UI renders for your terminal. |
 | `PATH` | Searched for `podman`, `git`, and (inside a Herdr pane) `herdr`. |

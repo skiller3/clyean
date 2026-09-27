@@ -12,7 +12,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clyean_agents::AgentId;
-use clyean_bridge::host::{self as bridge_host, ConnectFuture, Connector, LocalStream};
+use clyean_bridge::host::{
+    self as bridge_host, BridgeHandle, ConnectFuture, Connector, LocalStream,
+};
+use clyean_bridge::protocol::Peer;
+use clyean_orchestrator::protocol::{ConnectionOrigin, PeerProcess};
 use clyean_orchestrator::scaffold::{
     prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
 };
@@ -20,7 +24,6 @@ use clyean_orchestrator::server::handle_connection;
 use clyean_orchestrator::service::{
     OrchestratorService, ProjectServices, ProjectState, UnscaffoldedProject,
 };
-use clyean_orchestrator::CredentialAuthority;
 use clyean_project::{LaunchId, PlanCatalog, ProjectId};
 use clyean_sandbox::launch::{PROJECT_LABEL, ROLE_LABEL, USER_ASSISTANT_ROLE};
 use clyean_sandbox::{AgentContainerSpec, Helpers, LaunchContext, LaunchRole, Podman, Topology};
@@ -28,7 +31,8 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, Command};
 
 use crate::cli::{LaunchArgs, ProjectArgs, VERSION};
-use crate::runtime::{ProjectRuntime, SandboxRenderer, SandboxSessionFactory};
+use crate::runtime::{Orchestration, ProjectRuntime, SandboxRenderer};
+use crate::servers::{self, stop_servers_left_behind};
 
 /// How long the User Assistant's container may take to start.
 const CONTAINER_START_TIMEOUT: Duration = Duration::from_secs(120);
@@ -76,12 +80,12 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
         runtime.provisional_config(&pending)
     };
     let mut context = runtime.launch_context(config.clone(), &podman_sandbox);
+    runtime.attach_project_network(&mut context, &podman_sandbox);
+    stop_servers_left_behind(&context);
+    let launch_id = LaunchId::generate();
+    let orchestration = Orchestration::new(&context, &launch_id);
     let renderer = Arc::new(SandboxRenderer::new(context.clone()));
-    let credentials = Arc::new(CredentialAuthority::default());
-    let factory = Arc::new(SandboxSessionFactory::new(
-        context.clone(),
-        credentials.clone(),
-    ));
+    let factory = orchestration.session_factory(context.clone());
     let state = if runtime.is_scaffolded() {
         ProjectState::Scaffolded(Arc::new(ProjectServices {
             directory: runtime.directory.clone(),
@@ -104,14 +108,13 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
             clyean_version: VERSION.to_string(),
         }))
     };
-    let service =
-        Arc::new(OrchestratorService::new(state, VERSION).with_credential_authority(credentials));
+    let service = Arc::new(orchestration.service(state));
 
     if args.r#continue {
         warn_if_another_launch_is_running(&runtime.podman, &runtime.project_id);
     }
     let role = LaunchRole::UserAssistant {
-        launch_id: LaunchId::generate(),
+        launch_id,
         bridge_binary,
     };
     context.herdr = runtime.container_herdr(&podman_sandbox).await;
@@ -138,7 +141,9 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
             .as_ref()
             .map(|herdr| herdr.socket_path.clone()),
     });
-    run_user_assistant(&context, &spec, connector).await
+    let outcome = run_user_assistant(&context, &spec, connector, &orchestration).await;
+    servers::finish(&orchestration.servers).await;
+    outcome
 }
 
 fn user_assistant_harness_args(context: &LaunchContext, args: &LaunchArgs) -> Vec<String> {
@@ -196,6 +201,7 @@ async fn run_user_assistant(
     context: &LaunchContext,
     spec: &AgentContainerSpec,
     connector: Arc<LaunchConnector>,
+    orchestration: &Orchestration,
 ) -> Result<i32> {
     ignore_interrupts();
     let podman = &context.podman;
@@ -221,10 +227,12 @@ async fn run_user_assistant(
             return Err(error.context("opening the User Assistant's bridge"));
         }
     };
+    orchestration.transport.attach(bridge.handle.clone());
     let status = container
         .wait()
         .await
         .context("waiting for the User Assistant")?;
+    orchestration.relays.close_all();
     bridge.close().await;
     Ok(status.code().unwrap_or(1))
 }
@@ -261,10 +269,12 @@ async fn wait_until_running(podman: &Podman, name: &str, container: &mut Child) 
     }
 }
 
-/// The running `podman exec` session of the bridge and the task that serves it.
+/// The running `podman exec` session of the bridge, the task that serves it, and the
+/// handle that opens streams into the container.
 struct OpenBridge {
     session: Child,
     served: tokio::task::JoinHandle<io::Result<()>>,
+    handle: BridgeHandle,
 }
 
 impl OpenBridge {
@@ -309,12 +319,17 @@ async fn open_bridge(
             tracing::info!(target: "clyean::bridge", "{line}");
         }
     });
-    let (introduced, version) = tokio::sync::oneshot::channel();
+    let (introduced, introduction) = tokio::sync::oneshot::channel();
     let served = tokio::spawn(bridge_host::serve(output, input, connector, introduced));
-    match tokio::time::timeout(BRIDGE_START_TIMEOUT, version).await {
-        Ok(Ok(version)) => {
+    match tokio::time::timeout(BRIDGE_START_TIMEOUT, introduction).await {
+        Ok(Ok(introduction)) => {
+            let version = introduction.version;
             tracing::info!(target: "clyean::bridge", %version, container = %container_name, "bridge open");
-            Ok(OpenBridge { session, served })
+            Ok(OpenBridge {
+                session,
+                served,
+                handle: introduction.handle,
+            })
         }
         Ok(Err(_)) => {
             let error = match served.await {
@@ -338,10 +353,10 @@ struct LaunchConnector {
 }
 
 impl Connector for LaunchConnector {
-    fn connect<'a>(&'a self, channel: &'a str) -> ConnectFuture<'a> {
+    fn connect<'a>(&'a self, channel: &'a str, peer: Option<&'a Peer>) -> ConnectFuture<'a> {
         Box::pin(async move {
             match channel {
-                clyean_bridge::ORCHESTRATOR_CHANNEL => Ok(self.orchestrator_stream()),
+                clyean_bridge::ORCHESTRATOR_CHANNEL => Ok(self.orchestrator_stream(peer)),
                 clyean_bridge::HERDR_CHANNEL => self.herdr_stream().await,
                 other => Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -353,12 +368,18 @@ impl Connector for LaunchConnector {
 }
 
 impl LaunchConnector {
-    fn orchestrator_stream(&self) -> Box<dyn LocalStream> {
+    fn orchestrator_stream(&self, peer: Option<&Peer>) -> Box<dyn LocalStream> {
         let (client, server) = tokio::io::duplex(64 * 1024);
         let service = self.service.clone();
+        let origin = ConnectionOrigin {
+            peer: peer.map(|peer| PeerProcess {
+                pid: peer.pid,
+                command: peer.command.clone(),
+            }),
+        };
         tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(server);
-            if let Err(error) = handle_connection(service, reader, writer).await {
+            if let Err(error) = handle_connection(service, origin, reader, writer).await {
                 tracing::debug!(target: "clyean::orchestrator", %error, "connection ended with an error");
             }
         });

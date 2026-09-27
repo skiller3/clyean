@@ -80,6 +80,24 @@ pub enum Response {
 pub struct ProtocolError {
     pub code: String,
     pub message: String,
+    /// Why a relay was denied: `denied`, `timed_out`, or `no_user_interface`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Where a connection to the orchestrator socket came from: the process that connected
+/// inside the User Assistant's container, as the bridge reported it, when it could tell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectionOrigin {
+    pub peer: Option<PeerProcess>,
+}
+
+/// A process inside the User Assistant's container.  Its command line is whatever the
+/// process set, so it is reported, not verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerProcess {
+    pub pid: u32,
+    pub command: String,
 }
 
 impl Response {
@@ -96,6 +114,24 @@ impl Response {
             error: ProtocolError {
                 code: code.to_string(),
                 message: message.into(),
+                reason: None,
+            },
+        }
+    }
+
+    /// An error that says why, as relay denials do.
+    pub fn error_with_reason(
+        id: &str,
+        code: &str,
+        message: impl Into<String>,
+        reason: Option<&str>,
+    ) -> Self {
+        Self::Error {
+            id: id.to_string(),
+            error: ProtocolError {
+                code: code.to_string(),
+                message: message.into(),
+                reason: reason.map(str::to_string),
             },
         }
     }
