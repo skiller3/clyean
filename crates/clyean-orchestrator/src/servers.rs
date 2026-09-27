@@ -577,8 +577,9 @@ impl ServerManager {
             .map_err(ServerError::invalid)?;
         let specs = self.relay_specs(&request)?;
         let cwd = request.cwd.trim().to_string();
-        if let Some(running) = self.check_running(&request, &cwd, &specs).await? {
-            return Ok(running);
+        let timeout = Duration::from_secs(request.ready_timeout_seconds);
+        if let Some(running) = self.find_running(&request, &cwd, &specs).await? {
+            return self.await_running(running, timeout).await;
         }
         let facts = ServerFacts {
             name: request.name.clone(),
@@ -609,37 +610,42 @@ impl ServerManager {
             ports: request.ports.clone(),
             relays,
         };
-        let container = {
+        let started = {
             let _starting = self.starting.lock().await;
-            if let Some(running) = self.check_running(&request, &cwd, &specs).await? {
-                return Ok(running);
+            if let Some(running) = self.find_running(&request, &cwd, &specs).await? {
+                Err(running)
+            } else {
+                let server = ServerContainer {
+                    name: request.name.clone(),
+                    command: request.command.clone(),
+                    workdir,
+                    persistent: request.persistent,
+                    launch_id: self.launch_id.clone(),
+                    requested_by: agent.id().to_string(),
+                    publications: publications(&definition.relays),
+                    definition: serde_json::to_string(&definition).expect("definitions serialize"),
+                };
+                Ok(self.runtime.start(&server).await.map_err(|message| {
+                    ServerError::failed(format!(
+                        "Podman could not start server {}: {message}",
+                        request.name
+                    ))
+                })?)
             }
-            let server = ServerContainer {
-                name: request.name.clone(),
-                command: request.command.clone(),
-                workdir,
-                persistent: request.persistent,
-                launch_id: self.launch_id.clone(),
-                requested_by: agent.id().to_string(),
-                publications: publications(&definition.relays),
-                definition: serde_json::to_string(&definition).expect("definitions serialize"),
-            };
-            self.runtime.start(&server).await.map_err(|message| {
-                ServerError::failed(format!(
-                    "Podman could not start server {}: {message}",
-                    request.name
-                ))
-            })?
         };
-        let timeout = Duration::from_secs(request.ready_timeout_seconds);
-        self.await_ready(
-            &request.name,
-            &container,
-            request.persistent,
-            &definition,
-            timeout,
-        )
-        .await
+        match started {
+            Ok(container) => {
+                self.await_ready(
+                    &request.name,
+                    &container,
+                    request.persistent,
+                    &definition,
+                    timeout,
+                )
+                .await
+            }
+            Err(running) => self.await_running(running, timeout).await,
+        }
     }
 
     /// The relays of a launch with their host addresses resolved.
@@ -668,38 +674,50 @@ impl ServerManager {
             .collect()
     }
 
-    /// The report of the server this launch asks for when it already runs, or why another
-    /// server stands in the way.
-    async fn check_running(
+    /// The running server this launch asks for again, or why another server stands in the
+    /// way.
+    async fn find_running(
         &self,
         request: &LaunchRequest,
         cwd: &str,
         specs: &[RelaySpec],
-    ) -> Result<Option<Value>, ServerError> {
+    ) -> Result<Option<RunningServer>, ServerError> {
         let running = self.runtime.list().await.map_err(ServerError::failed)?;
-        if let Some(server) = running.iter().find(|server| server.name == request.name) {
-            let definition = server.definition.clone().unwrap_or_default();
-            if server.persistent != request.persistent
-                || !definition.is_asked_by(&request.command, cwd, &request.ports, specs)
-            {
-                return Err(ServerError::exists(&request.name));
-            }
-            let timeout = Duration::from_secs(request.ready_timeout_seconds);
-            let report = self
-                .await_ready(
-                    &server.name,
-                    &server.container,
-                    server.persistent,
-                    &definition,
-                    timeout,
-                )
-                .await?;
-            return Ok(Some(report));
+        let count = running.len();
+        if let Some(server) = running
+            .into_iter()
+            .find(|server| server.name == request.name)
+        {
+            let asked_again = server.persistent == request.persistent
+                && server.definition.as_ref().is_some_and(|definition| {
+                    definition.is_asked_by(&request.command, cwd, &request.ports, specs)
+                });
+            return if asked_again {
+                Ok(Some(server))
+            } else {
+                Err(ServerError::exists(&request.name))
+            };
         }
-        if running.len() >= MAX_SERVERS {
+        if count >= MAX_SERVERS {
             return Err(ServerError::limit());
         }
         Ok(None)
+    }
+
+    async fn await_running(
+        &self,
+        server: RunningServer,
+        timeout: Duration,
+    ) -> Result<Value, ServerError> {
+        let definition = server.definition.unwrap_or_default();
+        self.await_ready(
+            &server.name,
+            &server.container,
+            server.persistent,
+            &definition,
+            timeout,
+        )
+        .await
     }
 
     /// Waits until every declared port listens on the project network, or the timeout
@@ -972,6 +990,8 @@ mod tests {
     struct FakeRuntime {
         unavailable: Option<String>,
         running: Mutex<Vec<RunningServer>>,
+        /// A server another process starts right after the first listing.
+        started_elsewhere: Mutex<Option<RunningServer>>,
         started: Mutex<Vec<ServerContainer>>,
         stopped: Mutex<Vec<String>>,
         /// `None` probes as a container that has ended.
@@ -1018,7 +1038,13 @@ mod tests {
             })
         }
         fn list(&self) -> BoxFuture<'_, Result<Vec<RunningServer>, String>> {
-            Box::pin(async move { Ok(self.running.lock().unwrap().clone()) })
+            Box::pin(async move {
+                let listed = self.running.lock().unwrap().clone();
+                if let Some(server) = self.started_elsewhere.lock().unwrap().take() {
+                    self.running.lock().unwrap().push(server);
+                }
+                Ok(listed)
+            })
         }
         fn probe<'a>(
             &'a self,
@@ -1269,6 +1295,35 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(relayed.code, "server_exists");
+    }
+
+    #[tokio::test]
+    async fn a_server_another_process_starts_meanwhile_is_returned_rather_than_started_again() {
+        let runtime = Arc::new(FakeRuntime::listening());
+        let asked = request(json!({}));
+        let definition = ServerDefinition {
+            command: asked.command.clone(),
+            cwd: "app".into(),
+            ports: asked.ports.clone(),
+            relays: Vec::new(),
+        };
+        *runtime.started_elsewhere.lock().unwrap() = Some(RunningServer {
+            name: "web".into(),
+            container: "clyean-p-server-web".into(),
+            persistent: false,
+            launch_id: "l2".into(),
+            requested_by: "qa-tester".into(),
+            started_at: 0,
+            definition: Some(definition),
+        });
+        let servers = ServerManager::new(runtime.clone(), None, "l1");
+        let report = servers
+            .launch(asked, AgentId::Programmer, process())
+            .await
+            .unwrap();
+        assert_eq!(report["container"], "clyean-p-server-web");
+        assert_eq!(report["ready"], true);
+        assert!(runtime.started.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
