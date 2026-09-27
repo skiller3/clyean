@@ -37,6 +37,8 @@ pub const MAX_SCTP_ASSOCIATIONS: usize = 16;
 const FLOW_QUEUE: usize = 64;
 /// How often idle UDP flows are looked for.
 const FLOW_SWEEP: Duration = Duration::from_secs(10);
+/// How long accepting pauses after an error, such as running out of descriptors.
+const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(100);
 /// How long an SCTP accept waits before checking whether its relay was closed.
 #[cfg(target_os = "linux")]
 const SCTP_ACCEPT_POLL: Duration = Duration::from_millis(500);
@@ -303,6 +305,9 @@ async fn accept_tcp(listener: TcpListener, context: RelayContext) {
             _ = context.until_stopped() => return,
         };
         let Ok((client, _)) = accepted else {
+            // An error such as running out of descriptors repeats until something frees,
+            // so the loop pauses rather than spinning.
+            tokio::time::sleep(ACCEPT_ERROR_PAUSE).await;
             continue;
         };
         let Some(guard) = context.admit(MAX_TCP_CONNECTIONS) else {
@@ -455,8 +460,13 @@ fn accept_sctp(
     runtime: tokio::runtime::Handle,
 ) {
     while !*context.stopped.borrow() {
-        let Ok(Some(association)) = listener.accept() else {
-            continue;
+        let association = match listener.accept() {
+            Ok(Some(association)) => association,
+            Ok(None) => continue,
+            Err(_) => {
+                std::thread::sleep(ACCEPT_ERROR_PAUSE);
+                continue;
+            }
         };
         let Some(guard) = context.admit(MAX_SCTP_ASSOCIATIONS) else {
             continue;
@@ -479,10 +489,13 @@ fn carry_sctp(
     let (mut reader, mut writer) = tokio::io::split(stream);
     let to_bridge = association.clone();
     let write_runtime = runtime.clone();
-    let guard = Arc::new(guard);
-    let sending_guard = guard.clone();
+    // Both threads share the guard and the sender, so the watcher below learns when the
+    // association has ended and lets its socket go.
+    let (ended, threads_ended) = tokio::sync::oneshot::channel::<()>();
+    let lifetime = Arc::new((guard, ended));
+    let sending_lifetime = lifetime.clone();
     std::thread::spawn(move || {
-        let _guard = sending_guard;
+        let _lifetime = sending_lifetime;
         while let Ok(Some(message)) = to_bridge.receive() {
             if write_runtime
                 .block_on(writer.write_all(&message.encode()))
@@ -496,7 +509,7 @@ fn carry_sctp(
     let to_client = association.clone();
     let read_runtime = runtime.clone();
     std::thread::spawn(move || {
-        let _guard = guard;
+        let _lifetime = lifetime;
         let mut messages = MessageReader::default();
         let mut buffer = vec![0u8; 64 * 1024];
         loop {
@@ -516,8 +529,10 @@ fn carry_sctp(
     });
     let mut stopped = context.stopped.clone();
     runtime.spawn(async move {
-        let _ = stopped.wait_for(|stopped| *stopped).await;
-        association.shutdown();
+        tokio::select! {
+            _ = stopped.wait_for(|stopped| *stopped) => association.shutdown(),
+            _ = threads_ended => {}
+        }
     });
 }
 

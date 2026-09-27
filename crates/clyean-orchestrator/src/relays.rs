@@ -353,8 +353,12 @@ impl RelayManager {
             )));
         }
         if !self.transport.supports(spec.protocol) {
+            let why = match spec.protocol {
+                RelayProtocol::Sctp => ": SCTP relays need a Linux or WSL host whose kernel provides SCTP (its sctp module)",
+                _ => "",
+            };
             return Err(RelayError::protocol_unsupported(format!(
-                "this host cannot relay {} into the User Assistant's container",
+                "this host cannot relay {} into the User Assistant's container{why}",
                 spec.protocol.label()
             )));
         }
@@ -932,6 +936,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(sctp.code, "relay_protocol_unsupported");
+        assert!(
+            sctp.message.contains("Linux or WSL host"),
+            "{}",
+            sctp.message
+        );
         let invalid = fixture
             .manager
             .open(request(RelayProtocol::Tcp, 0, 1), process())
