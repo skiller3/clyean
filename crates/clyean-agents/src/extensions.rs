@@ -39,7 +39,7 @@ mod tests {
     #[test]
     fn embedded_extensions_carry_version_markers() {
         assert_eq!(HERDR_REPORTER.version(), Some(1));
-        assert_eq!(ORCHESTRATION.version(), Some(3));
+        assert_eq!(ORCHESTRATION.version(), Some(4));
         assert_eq!(CREDENTIALS.version(), Some(1));
         assert_eq!(managed_extensions(AgentId::UserAssistant).len(), 2);
         assert_eq!(managed_extensions(AgentId::Programmer), [CREDENTIALS]);
