@@ -127,7 +127,7 @@ async fn a_client_inside_reaches_the_host_service_through_the_bridge() {
         .unwrap()
         .unwrap();
     assert_eq!(end, None);
-    #[cfg(target_os = "linux")]
+    let expected_peer = cfg!(target_os = "linux").then(std::process::id);
     assert_eq!(
         session
             .connector
@@ -136,8 +136,8 @@ async fn a_client_inside_reaches_the_host_service_through_the_bridge() {
             .unwrap()
             .first()
             .map(|peer| peer.pid),
-        Some(std::process::id()),
-        "the host learns which process connected"
+        expected_peer,
+        "the host learns which process connected wherever the kernel reports it"
     );
 }
 
