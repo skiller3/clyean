@@ -8,14 +8,14 @@ use clyean_orchestrator::protocol::{ConnectionOrigin, Request, StreamedEvent};
 use clyean_orchestrator::scaffold::{
     prepare_host_files, refresh_sandbox_files, PendingScaffold, SandboxPreparation,
 };
-use clyean_orchestrator::service::{OrchestratorService, ProjectState, UnscaffoldedProject};
-use clyean_orchestrator::CredentialAuthority;
-use clyean_project::ProjectType;
+use clyean_orchestrator::service::{ProjectState, UnscaffoldedProject};
+use clyean_project::{LaunchId, ProjectType};
 use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::cli::{ProjectArgs, ProjectTypeArg, ScaffoldArgs};
-use crate::runtime::{ProjectRuntime, SandboxRenderer, SandboxSessionFactory};
+use crate::runtime::{Orchestration, ProjectRuntime, SandboxRenderer};
+use crate::servers;
 
 pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
     let runtime = ProjectRuntime::resolve(project)?;
@@ -73,21 +73,18 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
     };
     let mut context = runtime.launch_context(runtime.provisional_config(&pending), &podman_sandbox);
     runtime.attach_project_network(&mut context, &podman_sandbox);
-    let service = Arc::new(OrchestratorService::new(
-        ProjectState::Unscaffolded(Box::new(UnscaffoldedProject {
+    let orchestration = Orchestration::new(&context, &LaunchId::generate());
+    let service = Arc::new(orchestration.service(ProjectState::Unscaffolded(Box::new(
+        UnscaffoldedProject {
             directory: runtime.directory.clone(),
             layout: runtime.layout.clone(),
             git,
             pending,
             renderer: Arc::new(SandboxRenderer::new(context.clone())),
-            factory: Arc::new(SandboxSessionFactory::new(
-                context,
-                Arc::new(CredentialAuthority::new(Arc::default())),
-            )),
+            factory: orchestration.session_factory(context),
             clyean_version: crate::cli::VERSION.to_string(),
-        })),
-        crate::cli::VERSION,
-    ));
+        },
+    ))));
     let request = Request {
         id: "scaffold".into(),
         method: "project.scaffold".into(),
@@ -106,7 +103,9 @@ pub async fn run(project: &ProjectArgs, args: ScaffoldArgs) -> Result<i32> {
     let Some(stream) = dispatch.stream else {
         bail!("scaffolding did not start");
     };
-    print_stream(stream.receiver).await
+    let outcome = print_stream(stream.receiver).await;
+    servers::finish(&orchestration.servers).await;
+    outcome
 }
 
 /// Prints streamed events until a terminal one; returns the exit code.

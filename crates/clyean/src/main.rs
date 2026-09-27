@@ -8,6 +8,7 @@ mod cli;
 mod commands;
 mod relays;
 mod runtime;
+mod servers;
 
 use clap::Parser;
 

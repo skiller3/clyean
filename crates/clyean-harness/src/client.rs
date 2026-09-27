@@ -44,6 +44,22 @@ pub trait UiRequestHandler: Send + Sync {
     fn answer<'a>(&'a self, request: &'a RpcFrame) -> BoxFuture<'a, Option<Value>>;
 }
 
+/// Handlers asked in turn; the first that answers a request answers it.
+pub struct UiRequestHandlers(pub Vec<Arc<dyn UiRequestHandler>>);
+
+impl UiRequestHandler for UiRequestHandlers {
+    fn answer<'a>(&'a self, request: &'a RpcFrame) -> BoxFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            for handler in &self.0 {
+                if let Some(answer) = handler.answer(request).await {
+                    return Some(answer);
+                }
+            }
+            None
+        })
+    }
+}
+
 pub struct HarnessClient {
     stdin: SharedStdin,
     child: Mutex<Option<Child>>,
@@ -279,4 +295,36 @@ async fn read_frames(
     }
     pending.lock().await.clear();
     let _ = events.send(HarnessEvent::Closed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct Titled(&'static str, &'static str);
+
+    impl UiRequestHandler for Titled {
+        fn answer<'a>(&'a self, request: &'a RpcFrame) -> BoxFuture<'a, Option<Value>> {
+            Box::pin(
+                async move { (request.0["title"] == self.0).then(|| json!({"value": self.1})) },
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn the_first_handler_that_answers_a_request_answers_it() {
+        let handlers = UiRequestHandlers(vec![
+            Arc::new(Titled("clyean:credentials", "copies")),
+            Arc::new(Titled("clyean:server", "started")),
+            Arc::new(Titled("clyean:server", "shadowed")),
+        ]);
+        let request =
+            |title: &str| RpcFrame(json!({"type": "extension_ui_request", "title": title}));
+        assert_eq!(
+            handlers.answer(&request("clyean:server")).await,
+            Some(json!({"value": "started"}))
+        );
+        assert_eq!(handlers.answer(&request("other")).await, None);
+    }
 }

@@ -151,26 +151,14 @@ impl AgentContainerSpec {
         if self.remove_on_exit {
             args.push("--rm".into());
         }
-        for (key, value) in &self.labels {
-            args.push("--label".into());
-            args.push(format!("{key}={value}"));
-        }
-        args.push("--workdir".into());
-        args.push(self.workdir.clone());
-        for mount in &self.mounts {
-            args.push("--mount".into());
-            args.push(mount.podman_argument());
-        }
-        // Without notmpcopyup, Podman copies whatever the root filesystem holds at the path
-        // into memory, for the profiles mask every agent's profile.
-        for path in &self.tmpfs_mounts {
-            args.push("--mount".into());
-            args.push(format!("type=tmpfs,dst={path},notmpcopyup"));
-        }
-        for (key, value) in &self.environment {
-            args.push("--env".into());
-            args.push(format!("{key}={value}"));
-        }
+        push_filesystem_and_environment(
+            &mut args,
+            &self.labels,
+            &self.workdir,
+            &self.mounts,
+            &self.tmpfs_mounts,
+            &self.environment,
+        );
         if let Some(network) = &self.network {
             args.push("--network".into());
             args.push(network.clone());
@@ -184,6 +172,93 @@ impl AgentContainerSpec {
         args.push(self.rootfs.clone());
         args.extend(self.command.iter().cloned());
         args
+    }
+}
+
+/// A server container: detached, removed when its command ends, on the project network
+/// under its server's name, and publishing the relays the user approved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerContainerSpec {
+    pub name: String,
+    /// The root filesystem's path on the Podman host.
+    pub rootfs: String,
+    pub workdir: String,
+    pub labels: Vec<(String, String)>,
+    pub mounts: Vec<MountSpec>,
+    pub tmpfs_mounts: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub network: String,
+    pub alias: String,
+    /// `--publish` values, each `<host address>:<host port>:<guest port>/<protocol>`.
+    pub publish: Vec<String>,
+    pub extra_run_args: Vec<String>,
+    pub command: Vec<String>,
+}
+
+impl ServerContainerSpec {
+    /// The complete argument vector after `podman`, every option before the rootfs path.
+    pub fn run_args(&self) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "run".into(),
+            "--detach".into(),
+            "--rm".into(),
+            "--init".into(),
+            "--name".into(),
+            self.name.clone(),
+        ];
+        push_filesystem_and_environment(
+            &mut args,
+            &self.labels,
+            &self.workdir,
+            &self.mounts,
+            &self.tmpfs_mounts,
+            &self.environment,
+        );
+        args.extend([
+            "--network".into(),
+            self.network.clone(),
+            "--network-alias".into(),
+            self.alias.clone(),
+        ]);
+        for publication in &self.publish {
+            args.push("--publish".into());
+            args.push(publication.clone());
+        }
+        args.extend(self.extra_run_args.iter().cloned());
+        args.push("--rootfs".into());
+        args.push(self.rootfs.clone());
+        args.extend(self.command.iter().cloned());
+        args
+    }
+}
+
+fn push_filesystem_and_environment(
+    args: &mut Vec<String>,
+    labels: &[(String, String)],
+    workdir: &str,
+    mounts: &[MountSpec],
+    tmpfs_mounts: &[String],
+    environment: &[(String, String)],
+) {
+    for (key, value) in labels {
+        args.push("--label".into());
+        args.push(format!("{key}={value}"));
+    }
+    args.push("--workdir".into());
+    args.push(workdir.to_string());
+    for mount in mounts {
+        args.push("--mount".into());
+        args.push(mount.podman_argument());
+    }
+    // Without notmpcopyup, Podman copies whatever the root filesystem holds at the path
+    // into memory, for the profiles mask every agent's profile.
+    for path in tmpfs_mounts {
+        args.push("--mount".into());
+        args.push(format!("type=tmpfs,dst={path},notmpcopyup"));
+    }
+    for (key, value) in environment {
+        args.push("--env".into());
+        args.push(format!("{key}={value}"));
     }
 }
 

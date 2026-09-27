@@ -123,6 +123,29 @@ test("approvals ask through an overlay, one at a time, and hold Herdr blocked me
 	expect(await approvals.approve({ hasUI: false }, PROCESS_FACTS)).toEqual({ decision: "deny", reason: "no_user_interface" });
 });
 
+test("a queued prompt keeps only the time the host allows from its arrival", async () => {
+	const { RelayApprovals } = await importFresh(MODULE);
+	const signal = { begin() {}, clear() {} };
+	const approvals = new RelayApprovals(signal, 40);
+	let shown = 0;
+	const ctx = {
+		hasUI: true,
+		ui: {
+			custom: (factory: any) =>
+				new Promise(resolve => {
+					shown += 1;
+					factory({ requestRender() {} }, {}, {}, () => {});
+					setTimeout(() => resolve("Allow once"), 80);
+				}),
+		},
+	};
+	const first = approvals.approve(ctx, PROCESS_FACTS);
+	const second = approvals.approve(ctx, PROCESS_FACTS);
+	expect(await first).toEqual({ decision: "once" });
+	expect(await second).toEqual({ decision: "deny", reason: "timed_out" });
+	expect(shown).toBe(1);
+});
+
 function leaseReply(request: any): StubReply {
 	if (request.method === "session.lease") return { result: { type: "lease" }, closeAfterEvents: false };
 	return { result: { type: "project_status", scaffolded: true, incomplete_work: [] } };
@@ -290,4 +313,89 @@ test("clyean_relay opens, lists, and closes relays through the orchestrator sock
 	expect(closed.content[0].text).toBe("Relay r-1 is closed.");
 	const missing = await tool.execute("c4", { action: "open" });
 	expect(missing.isError).toBe(true);
+});
+
+const STARTED = {
+	type: "server_started",
+	name: "web",
+	ready: true,
+	persistent: true,
+	sandbox_endpoints: [{ protocol: "tcp", host: "web", address: "10.89.0.7", port: 5173, state: "listening" }],
+	relays: [],
+	summary: "Server web is ready: from inside the sandbox at web:5173 (TCP).  It keeps running after Clyean exits, until stopped.",
+};
+
+function serverReply(request: any): StubReply {
+	if (request.method === "server.launch") return { result: STARTED };
+	if (request.method === "server.list") return { result: { type: "server_list", servers: [{ ...STARTED, type: "server" }] } };
+	if (request.method === "server.stop") return { result: { type: "server_stopped", name: request.params.name } };
+	if (request.method === "project.status") return { result: { type: "project_status", scaffolded: true, incomplete_work: [] } };
+	return { error: { code: "unknown_method", message: "nope" } };
+}
+
+test("clyean_server launches, lists, and stops servers through the orchestrator socket", async () => {
+	server = await startStubOrchestrator("server-tool", serverReply);
+	sandbox.reset({ CLYEAN_AGENT: "user-assistant", CLYEAN_ORCHESTRATOR_SOCKET: server.socketPath });
+	const fake = createFakePi();
+	const { default: install } = await importFresh(MODULE);
+	install(fake.pi);
+	const tool = fake.tools.get("clyean_server");
+	const started = await tool.execute("c1", {
+		action: "launch",
+		name: "web",
+		command: "npm run dev -- --host 0.0.0.0",
+		cwd: "app",
+		persistent: true,
+		ports: [{ protocol: "tcp", port: 5173 }],
+		relays: [{ protocol: "tcp", host_port: 3000, guest_port: 5173 }],
+	});
+	expect(server.requests[0]).toMatchObject({
+		method: "server.launch",
+		params: {
+			name: "web",
+			command: "npm run dev -- --host 0.0.0.0",
+			cwd: "app",
+			persistent: true,
+			ports: [{ protocol: "tcp", port: 5173 }],
+			relays: [{ protocol: "tcp", host_port: 3000, guest_port: 5173 }],
+		},
+	});
+	expect(started.content[0].text).toBe(STARTED.summary);
+	expect((await tool.execute("c2", { action: "list" })).content[0].text).toBe(STARTED.summary);
+	expect((await tool.execute("c3", { action: "stop", name: "web" })).content[0].text).toBe("Server web is stopped.");
+	const missing = await tool.execute("c4", { action: "launch", name: "web", command: "x" });
+	expect(missing.isError).toBe(true);
+	expect(missing.content[0].text).toContain("ports");
+});
+
+test("/clyean servers lists servers and stops the one the user picks", async () => {
+	server = await startStubOrchestrator("server-command", serverReply);
+	sandbox.reset({ CLYEAN_AGENT: "user-assistant", CLYEAN_ORCHESTRATOR_SOCKET: server.socketPath });
+	const fake = createFakePi();
+	const { default: install } = await importFresh(MODULE);
+	install(fake.pi);
+	const { ctx, notifications } = createFakeContext();
+	(ctx.ui as any).select = async (_title: string, options: string[]) => options[0];
+	await fake.commands.get("clyean").handler("servers", ctx);
+	expect(notifications[0].message).toBe(STARTED.summary);
+	expect(server.requests.map(request => request.method)).toEqual(["server.list", "server.stop"]);
+	expect(notifications[1].message).toBe("Server web is stopped.");
+	await fake.commands.get("clyean").handler("servers stop db", ctx);
+	expect(server.requests[2]).toMatchObject({ method: "server.stop", params: { name: "db" } });
+	await fake.commands.get("clyean").handler("servers stop", ctx);
+	expect(notifications.at(-1)).toEqual({ message: "usage: /clyean servers stop <name>", type: "error" });
+});
+
+test("a new session hears about the servers already running", async () => {
+	server = await startStubOrchestrator("server-notice", serverReply);
+	sandbox.reset({ CLYEAN_AGENT: "user-assistant", CLYEAN_ORCHESTRATOR_SOCKET: server.socketPath });
+	const fake = createFakePi();
+	const { default: install } = await importFresh(MODULE);
+	install(fake.pi);
+	const { ctx, notifications } = createFakeContext();
+	await fake.emit("session_start", {}, ctx);
+	await waitFor(() => notifications.length > 0, 2000, "the notice");
+	expect(notifications[0].message).toBe(
+		"Servers running for this project: web (persistent). Run /clyean servers to see where they listen or to stop one.",
+	);
 });

@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Skye Isard
 // SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-clyean-output-exception
-// CLYEAN_EXTENSION_VERSION=4
+// CLYEAN_EXTENSION_VERSION=5
 // managed by clyean; upgrading clyean overwrites this file.
 // add user customizations in sibling files instead of editing this one.
 //
@@ -10,7 +10,8 @@
 // The User Assistant also answers the orchestrator's requests for copies of its
 // sign-ins, which other agents receive, and signs in on other agents' behalf.  It
 // asks the user about relays into the sandbox, relays the harness's sign-in
-// callbacks to the host's browser, and edits the user's relay allowlists.
+// callbacks to the host's browser, edits the user's relay allowlists, and launches,
+// lists, and stops server containers.
 
 import fs from "node:fs";
 import net from "node:net";
@@ -82,6 +83,8 @@ const TERMINAL_EVENTS = new Set(["information_requested", "completed", "failed"]
 const TRANSCRIPT_LINE_LIMIT = 400;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 const DEFAULT_SILENCE_TIMEOUT_MS = 10 * 60 * 1000;
+/** Long enough for a launch whose four relays each wait on the user, then on the server. */
+const SERVER_LAUNCH_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class OrchestratorError extends Error {
 	constructor(
@@ -1017,18 +1020,22 @@ export class RelayApprovals {
 		private readonly timeoutMs: number = APPROVAL_TIMEOUT_MS,
 	) {}
 
+	/** Prompts wait their turn, and each has the time the host allows from its arrival, not from its display. */
 	approve(ctx: any, facts: any): Promise<{ decision: string; reason?: string }> {
-		const next = this.#queue.then(() => this.#ask(ctx, facts));
+		const deadline = Date.now() + this.timeoutMs;
+		const next = this.#queue.then(() => this.#ask(ctx, facts, deadline));
 		this.#queue = next.catch(() => undefined);
 		return next;
 	}
 
-	async #ask(ctx: any, facts: any): Promise<{ decision: string; reason?: string }> {
+	async #ask(ctx: any, facts: any, deadline: number): Promise<{ decision: string; reason?: string }> {
 		if (ctx?.hasUI !== true || !ctx?.ui) return { decision: "deny", reason: "no_user_interface" };
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) return decisionFor(TIMED_OUT);
 		const { lines, options } = renderApprovalPrompt(facts);
 		this.wait.begin(RELAY_APPROVAL_WAIT_LABEL);
 		try {
-			return decisionFor(await this.#show(ctx, lines, options));
+			return decisionFor(await this.#show(ctx, lines, options, remainingMs));
 		} catch {
 			return { decision: "deny", reason: "no_user_interface" };
 		} finally {
@@ -1036,7 +1043,7 @@ export class RelayApprovals {
 		}
 	}
 
-	async #show(ctx: any, lines: string[], options: string[]): Promise<string | undefined> {
+	async #show(ctx: any, lines: string[], options: string[], timeoutMs: number): Promise<string | undefined> {
 		if (typeof ctx.ui.custom === "function") {
 			return ctx.ui.custom(
 				(tui: any, theme: any, _keybindings: unknown, done: (choice: string) => void) =>
@@ -1045,7 +1052,7 @@ export class RelayApprovals {
 						options,
 						done,
 						() => tui?.requestRender?.(),
-						this.timeoutMs,
+						timeoutMs,
 						text => (typeof theme?.fg === "function" ? theme.fg("accent", text) : text),
 					),
 				{ overlay: true },
@@ -1053,8 +1060,8 @@ export class RelayApprovals {
 		}
 		if (typeof ctx.ui.select !== "function") return undefined;
 		const started = Date.now();
-		const choice = await ctx.ui.select(lines.join("\n"), options, { timeout: this.timeoutMs });
-		return choice ?? (Date.now() - started >= this.timeoutMs ? TIMED_OUT : undefined);
+		const choice = await ctx.ui.select(lines.join("\n"), options, { timeout: timeoutMs });
+		return choice ?? (Date.now() - started >= timeoutMs ? TIMED_OUT : undefined);
 	}
 }
 
@@ -1234,6 +1241,25 @@ function renderRelayOpened(result: any): string {
 	return `Relay ${result?.relay_id} open: ${String(result?.protocol ?? "").toUpperCase()} ${stringList(result?.endpoints).join(", ")} -> port ${result?.guest_port} in this container (${approval}).`;
 }
 
+export function renderServerList(listing: any): string {
+	const servers: any[] = Array.isArray(listing?.servers) ? listing.servers : [];
+	if (servers.length === 0) return "No servers are running for this project.";
+	return servers.map(server => String(server.summary ?? server.name)).join("\n");
+}
+
+/** The `server.launch` parameters among the `clyean_server` tool's. */
+export function serverLaunchParams(params: any): Record<string, unknown> {
+	if (!params?.name || !params?.command) throw new Error("launch needs a name and a command");
+	if (!Array.isArray(params.ports) || params.ports.length === 0) {
+		throw new Error("launch needs the ports the server listens on, such as [{\"protocol\": \"tcp\", \"port\": 5173}]");
+	}
+	const request: Record<string, unknown> = { name: params.name, command: params.command, ports: params.ports };
+	for (const key of ["cwd", "persistent", "relays", "ready_timeout_seconds", "reason"]) {
+		if (params[key] !== undefined) request[key] = params[key];
+	}
+	return request;
+}
+
 export function renderRelayList(relays: any[]): string {
 	if (relays.length === 0) return "No relays are open.";
 	return relays
@@ -1289,10 +1315,12 @@ export default function clyeanOrchestration(
 	const env: Env = process.env;
 	if (env.CLYEAN_AGENT && env.CLYEAN_AGENT !== USER_ASSISTANT_AGENT_ID) return;
 
+	const connectTimeoutMs = parseDurationEnv(env, "CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS", DEFAULT_CONNECT_TIMEOUT_MS);
 	const client = new OrchestratorClient(orchestratorSocketPath(env), {
-		connectTimeoutMs: parseDurationEnv(env, "CLYEAN_ORCHESTRATOR_CONNECT_TIMEOUT_MS", DEFAULT_CONNECT_TIMEOUT_MS),
+		connectTimeoutMs,
 		silenceTimeoutMs: parseDurationEnv(env, "CLYEAN_ORCHESTRATOR_SILENCE_TIMEOUT_MS", DEFAULT_SILENCE_TIMEOUT_MS),
 	});
+	const serverClient = new OrchestratorClient(orchestratorSocketPath(env), { connectTimeoutMs, silenceTimeoutMs: SERVER_LAUNCH_TIMEOUT_MS });
 	const lease = env.CLYEAN_ORCHESTRATOR_LEASE === "1" ? holdOrchestratorLease(orchestratorSocketPath(env)) : undefined;
 	const emitBlocked = (data: unknown) => pi.events.emit("herdr:blocked", data);
 	const waitSignal = new HerdrWaitSignal(emitBlocked);
@@ -1530,6 +1558,92 @@ export default function clyeanOrchestration(
 		},
 	});
 
+	pi.registerTool({
+		name: "clyean_server",
+		label: "Clyean server",
+		description:
+			"Run a server (a development server, a database, or any long-running command) in a container of its own on the project network, or stop or list the project's servers. Every agent container of the project, yours included, reaches a server by its name on the ports it listens on, for example http://web:5173/, so the server must listen on all interfaces (0.0.0.0 or ::), not only on localhost; declare every port it listens on. A relay makes a port reachable from the user's computer and needs the user's approval unless their allowlist covers it; do not ask again after a denial. A server stops when this clyean process ends unless persistent is true. Launching the same name with the same parameters returns the running server. The server's output goes to .clyean/logs/servers/<name>.log. A server you only need yourself can instead run in your own container, with clyean_relay for the user to reach it. Actions: launch (name, command, ports, and optionally cwd, persistent, relays, ready_timeout_seconds, reason), stop (name), and list.",
+		parameters: z.object({
+			action: z.enum(["launch", "stop", "list"]).describe("What to do."),
+			name: z.string().optional().describe("The server's name: lower-case letters, digits, and hyphens, up to 32 characters; also its host name on the project network."),
+			command: z.string().optional().describe("The shell command that runs the server in the foreground, run with sh -c."),
+			cwd: z.string().optional().describe("The working directory, relative to the project directory; the project directory when omitted."),
+			persistent: z.boolean().optional().describe("Keep the server running after this clyean process ends, until stopped."),
+			ports: z
+				.array(z.object({ protocol: z.enum(["tcp", "udp", "sctp"]), port: z.number() }))
+				.optional()
+				.describe("Every port the server listens on in its container, one to eight."),
+			relays: z
+				.array(
+					z.object({
+						protocol: z.enum(["tcp", "udp"]),
+						host_port: z.number(),
+						guest_port: z.number(),
+						host_addresses: z.array(z.string()).optional(),
+					}),
+				)
+				.optional()
+				.describe("Up to four relays from a port on the user's computer (loopback unless host_addresses says otherwise) to one of the declared ports."),
+			ready_timeout_seconds: z.number().optional().describe("How long to wait for the ports to listen, 1 to 300; 60 when omitted."),
+			reason: z.string().optional().describe("Why, in a sentence the user reads if a relay needs approval."),
+		}),
+		async execute(_toolCallId: string, params: any) {
+			try {
+				if (params.action === "list") {
+					const listing = await client.request("server.list", {});
+					return textResult(renderServerList(listing), listing);
+				}
+				if (params.action === "stop") {
+					if (!params.name) throw new Error("stop needs the name of a server");
+					const stopped = await client.request("server.stop", { name: params.name });
+					return textResult(`Server ${params.name} is stopped.`, stopped);
+				}
+				const started: any = await serverClient.request("server.launch", serverLaunchParams(params));
+				return textResult(String(started?.summary ?? JSON.stringify(started)), started);
+			} catch (error) {
+				return textResult(describeError(error), { status: "error", code: (error as { code?: string })?.code }, true);
+			}
+		},
+	});
+
+	async function serversCommand(words: string[], ctx: any): Promise<void> {
+		const [action, name] = words;
+		if (action === "stop") {
+			if (!name || words.length !== 2) throw new Error("usage: /clyean servers stop <name>");
+			await client.request("server.stop", { name });
+			ctx.ui?.notify?.(`Server ${name} is stopped.`, "info");
+			return;
+		}
+		if (action) throw new Error("usage: /clyean servers [stop <name>]");
+		const listing: any = await client.request("server.list", {});
+		ctx.ui?.notify?.(renderServerList(listing), "info");
+		const servers: any[] = Array.isArray(listing?.servers) ? listing.servers : [];
+		if (servers.length === 0 || ctx?.hasUI !== true || typeof ctx.ui?.select !== "function") return;
+		const stopChoices = servers.map(server => `Stop ${server.name}`);
+		const choice = await ctx.ui.select("Servers", [...stopChoices, "Done"]);
+		const server = servers[stopChoices.indexOf(choice ?? "")];
+		if (!server) return;
+		await client.request("server.stop", { name: server.name });
+		ctx.ui?.notify?.(`Server ${server.name} is stopped.`, "info");
+	}
+
+	/** Tells the user which of the project's servers already run, persistent ones above all. */
+	async function announceRunningServers(ctx: HandlerContext): Promise<void> {
+		let listing: any;
+		try {
+			listing = await client.request("server.list", {});
+		} catch {
+			return;
+		}
+		const servers: any[] = Array.isArray(listing?.servers) ? listing.servers : [];
+		if (servers.length === 0) return;
+		const described = servers.map(server => `${server.name}${server.persistent ? " (persistent)" : ""}`);
+		ctx.ui?.notify?.(
+			`Servers running for this project: ${described.join(", ")}. Run /clyean servers to see where they listen or to stop one.`,
+			"info",
+		);
+	}
+
 	async function relaysCommand(words: string[], ctx: any): Promise<void> {
 		const request = lease?.request;
 		if (!request) {
@@ -1605,13 +1719,17 @@ export default function clyeanOrchestration(
 
 	pi.registerCommand("clyean", {
 		description:
-			"Show Clyean project status and unfinished orchestrated work; `/clyean sign-in <agent> <server>` signs in to an MCP server for another agent; `/clyean relays` shows and edits relays and their allowlists",
+			"Show Clyean project status and unfinished orchestrated work; `/clyean sign-in <agent> <server>` signs in to an MCP server for another agent; `/clyean relays` shows and edits relays and their allowlists; `/clyean servers` lists and stops server containers",
 		handler: async (args: string, ctx: any) => {
 			const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
 			const [subcommand, agent, server] = words;
 			try {
 				if (subcommand === "relays") {
 					await relaysCommand(words.slice(1), ctx);
+					return;
+				}
+				if (subcommand === "servers") {
+					await serversCommand(words.slice(1), ctx);
 					return;
 				}
 				if (subcommand === "sign-in") {
@@ -1663,6 +1781,7 @@ export default function clyeanOrchestration(
 		bindSession(ctx);
 		// A sign-in can follow startup without any typed command, as the first-run setup does.
 		if (lease && ctx?.hasUI) signIns.open();
+		void announceRunningServers(ctx);
 		let status: any;
 		try {
 			status = await fetchStatus();

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use clyean_agents::AgentId;
 use clyean_git::GitRepository;
 use clyean_harness::session::BoxFuture;
 use clyean_plantuml::RenderReport;
@@ -26,6 +27,7 @@ use crate::protocol::{
 };
 use crate::relays::{opened_result, RelayError, RelayManager, RelayRequest, Requester};
 use crate::scaffold::{complete_scaffold, PendingScaffold};
+use crate::servers::{LaunchRequest, ServerError, ServerManager};
 use crate::work::{AnswerDelivery, WorkHandle, WorkId, WorkRegistry};
 use crate::workflows::{self, WorkContext};
 use crate::{OrchestratorError, Result};
@@ -90,6 +92,7 @@ pub struct OrchestratorService {
     registry: Arc<WorkRegistry>,
     lease: Arc<UserAssistantLease>,
     relays: Option<Arc<RelayManager>>,
+    servers: Option<Arc<ServerManager>>,
     version: String,
 }
 
@@ -100,8 +103,15 @@ impl OrchestratorService {
             registry: Arc::new(WorkRegistry::default()),
             lease: Arc::default(),
             relays: None,
+            servers: None,
             version: version.into(),
         }
+    }
+
+    /// Tracks running work in `registry`, which the handlers of sub-agents' requests share.
+    pub fn with_registry(mut self, registry: Arc<WorkRegistry>) -> Self {
+        self.registry = registry;
+        self
     }
 
     /// Uses `lease`, which the credential authority of the sub-agent session factory
@@ -119,6 +129,12 @@ impl OrchestratorService {
     pub fn with_relays(mut self, relays: Arc<RelayManager>) -> Self {
         self.lease.set_request_handler(relays.clone());
         self.relays = Some(relays);
+        self
+    }
+
+    /// Serves `server.*` methods through `servers`.
+    pub fn with_servers(mut self, servers: Arc<ServerManager>) -> Self {
+        self.servers = Some(servers);
         self
     }
 
@@ -142,6 +158,9 @@ impl OrchestratorService {
         let id = request.id.clone();
         if request.method.starts_with("relay.") {
             return self.dispatch_relay(&id, &request, origin).await;
+        }
+        if request.method.starts_with("server.") {
+            return self.dispatch_server(&id, request, origin).await;
         }
         let result = match request.method.as_str() {
             "ping" => Ok(Dispatch {
@@ -239,6 +258,28 @@ impl OrchestratorService {
             "relay.list" => Ok(json!({"type": "relay_list", "relays": relays.list()})),
             method if method.starts_with("relay.allowlist.") => Err(RelayError::lease_only(method)),
             other => Err(RelayError::new_unknown(other)),
+        }
+    }
+
+    async fn dispatch_server(
+        &self,
+        id: &str,
+        request: Request,
+        origin: &ConnectionOrigin,
+    ) -> Dispatch {
+        let answer = match &self.servers {
+            None => Err(ServerError::failed(
+                "server containers are not available in this process",
+            )),
+            Some(servers) => server_method(servers, request, origin).await,
+        };
+        let response = match answer {
+            Ok(result) => Response::result(id, result),
+            Err(error) => Response::error_with_reason(id, error.code, error.message, error.reason),
+        };
+        Dispatch {
+            response,
+            stream: None,
         }
     }
 
@@ -477,6 +518,7 @@ impl OrchestratorService {
     ) -> Result<StreamAttachment> {
         let lock = acquire_project_lock(&services.layout, services.config.git.use_worktrees)?;
         let (handle, answers) = WorkHandle::new(WorkId::from_string(journal.work_id.clone()));
+        handle.record_phase(journal.phase);
         let receiver = handle.subscribe();
         self.registry.insert(handle.clone()).await;
         let registry = self.registry.clone();
@@ -521,6 +563,41 @@ impl OrchestratorService {
             receiver,
             replay: Vec::new(),
         })
+    }
+}
+
+/// Server methods asked through the orchestrator socket, which only processes in the User
+/// Assistant's container reach.
+async fn server_method(
+    servers: &ServerManager,
+    request: Request,
+    origin: &ConnectionOrigin,
+) -> std::result::Result<Value, ServerError> {
+    match request.method.as_str() {
+        "server.launch" => {
+            let launch = LaunchRequest::from_params(request.params)?;
+            let requester = Requester::Process {
+                pid: origin.peer.as_ref().map(|peer| peer.pid),
+                command: origin.peer.as_ref().map(|peer| peer.command.clone()),
+            };
+            servers
+                .launch(launch, AgentId::UserAssistant, requester)
+                .await
+        }
+        "server.stop" => {
+            let name = request
+                .params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ServerError::invalid("server.stop needs a name"))?;
+            servers.stop(name).await
+        }
+        "server.list" => servers.list().await,
+        other => Err(ServerError {
+            code: "unknown_method",
+            message: format!("unknown method: {other}"),
+            reason: None,
+        }),
     }
 }
 

@@ -146,6 +146,7 @@ impl WorkContext {
     }
 
     pub fn save(&self, journal: &mut WorkJournal) -> Result<()> {
+        self.handle.record_phase(journal.phase);
         let path = self.journal_path(journal);
         journal.save(&path)
     }

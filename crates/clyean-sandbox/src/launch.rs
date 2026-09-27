@@ -137,17 +137,22 @@ impl LaunchContext {
         agent: AgentId,
         role: &LaunchRole,
     ) -> (Vec<MountSpec>, Vec<String>) {
-        let user = self.user.name();
-        let masks = vec![
-            format!("/home/{user}/.omp/profiles"),
-            format!("/home/{user}/.omp/agent"),
-        ];
+        let masks = self.profile_masks();
         if matches!(role, LaunchRole::Maintenance) {
             return (Vec::new(), masks);
         }
-        let profile = container_profile_root(user, agent);
+        let profile = container_profile_root(self.user.name(), agent);
         let own_profile = MountSpec::read_write(format!("{}{profile}", self.sandbox.root), profile);
         (vec![own_profile], masks)
+    }
+
+    /// The paths that hold login stores: every agent's profile and `~/.omp/agent`.
+    pub(crate) fn profile_masks(&self) -> Vec<String> {
+        let user = self.user.name();
+        vec![
+            format!("/home/{user}/.omp/profiles"),
+            format!("/home/{user}/.omp/agent"),
+        ]
     }
 
     /// Empty filesystems over the host directories of Clyean's own state that the workspace
@@ -185,24 +190,9 @@ impl LaunchContext {
     fn shared_environment(&self, agent: AgentId, paths: &ContainerPaths) -> Vec<(String, String)> {
         let mut env = vec![
             ("CLYEAN_AGENT".to_string(), agent.id().to_string()),
-            ("CLYEAN_VERSION".to_string(), self.clyean_version.clone()),
-            (
-                "CLYEAN_PROJECT_DIR".to_string(),
-                paths.project_dir().to_string(),
-            ),
-            (
-                "CLYEAN_WORKSPACE_DIR".to_string(),
-                paths.workspace_dir().to_string(),
-            ),
-            (
-                "CLYEAN_HOST_WORKSPACE_DIR".to_string(),
-                self.directory.workspace().to_string_lossy().into_owned(),
-            ),
-            ("HOME".to_string(), self.user.home()),
             ("OMP_PROFILE".to_string(), agent.id().to_string()),
-            ("LANG".to_string(), "C.UTF-8".to_string()),
         ];
-        env.extend(self.git_environment(paths));
+        env.extend(self.common_environment(paths));
         // Herdr, on this host, can open the root filesystem's files only when it lives on
         // this host's kernel.
         if self.sandbox.topology == Topology::SharedKernel {
@@ -218,6 +208,30 @@ impl LaunchContext {
                 .into_iter()
                 .map(|(key, value)| (key.to_string(), value)),
         );
+        env
+    }
+
+    /// The variables of every container, agent or server: Clyean's version, the workspace
+    /// and project paths, the home directory, the locale, and Git's configuration.
+    pub(crate) fn common_environment(&self, paths: &ContainerPaths) -> Vec<(String, String)> {
+        let mut env = vec![
+            ("CLYEAN_VERSION".to_string(), self.clyean_version.clone()),
+            (
+                "CLYEAN_PROJECT_DIR".to_string(),
+                paths.project_dir().to_string(),
+            ),
+            (
+                "CLYEAN_WORKSPACE_DIR".to_string(),
+                paths.workspace_dir().to_string(),
+            ),
+            (
+                "CLYEAN_HOST_WORKSPACE_DIR".to_string(),
+                self.directory.workspace().to_string_lossy().into_owned(),
+            ),
+            ("HOME".to_string(), self.user.home()),
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+        ];
+        env.extend(self.git_environment(paths));
         env
     }
 

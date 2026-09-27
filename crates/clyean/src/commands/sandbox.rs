@@ -11,6 +11,7 @@ use clyean_sandbox::network::remove_sandbox_networks;
 use clyean_sandbox::orphans::{list_user_assistant_containers, prune_orphaned_user_assistants};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::roots::{StoredRoot, SANDBOX_LABEL};
+use clyean_sandbox::server::stop_stale_servers;
 use clyean_sandbox::{Helpers, HostOs, LaunchRole, Podman, PodmanEnvironment};
 
 use crate::cli::{ProjectArgs, SandboxAction, SandboxArgs};
@@ -101,7 +102,7 @@ async fn build(
         ])?;
         if !in_use.trim().is_empty() {
             bail!(
-                "the sandbox {} is in use by running containers; end the clyean processes of this project first",
+                "the sandbox {} is in use by running containers; end the clyean processes of this project, and stop its servers with `clyean server stop --all`, first",
                 location.id
             );
         }
@@ -161,7 +162,8 @@ fn shell(runtime: &ProjectRuntime, podman_sandbox: &PodmanSandbox) -> Result<i32
 }
 
 /// Removes User Assistant containers, in every project, whose `clyean` process is gone,
-/// and lists sandbox root filesystems whose project is gone, removing them on request.
+/// stops the non-persistent servers those processes left, and lists sandbox root
+/// filesystems whose project is gone, removing them on request.
 fn prune(podman: &Podman, remove: bool) -> Result<i32> {
     let removed = prune_orphaned_user_assistants(podman)
         .context("removing orphaned User Assistant containers")?;
@@ -170,6 +172,11 @@ fn prune(podman: &Podman, remove: bool) -> Result<i32> {
     }
     for name in removed {
         println!("Removed orphaned User Assistant container {name}");
+    }
+    let stopped = stop_stale_servers(podman, &[])
+        .context("stopping servers of clyean processes that ended")?;
+    for name in stopped {
+        println!("Stopped server {name}, whose clyean process ended");
     }
     let host = HostOs::current();
     let environment =
