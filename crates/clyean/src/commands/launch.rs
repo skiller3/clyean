@@ -82,6 +82,7 @@ pub async fn run(project: &ProjectArgs, args: LaunchArgs) -> Result<i32> {
         runtime.provisional_config(&pending)
     };
     let mut context = runtime.launch_context(config.clone(), &podman_sandbox);
+    runtime.attach_project_network(&mut context, &podman_sandbox);
     let renderer = Arc::new(SandboxRenderer::new(context.clone()));
     let lease = Arc::new(UserAssistantLease::default());
     let credentials = Arc::new(CredentialAuthority::new(lease.clone()));

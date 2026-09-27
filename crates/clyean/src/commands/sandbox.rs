@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use clyean_agents::AgentId;
 use clyean_orchestrator::scaffold::{refresh_sandbox_files, PendingScaffold, SandboxPreparation};
 use clyean_project::{ProjectLayout, SandboxId};
+use clyean_sandbox::network::remove_sandbox_networks;
 use clyean_sandbox::orphans::{list_user_assistant_containers, prune_orphaned_user_assistants};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::roots::{StoredRoot, SANDBOX_LABEL};
@@ -231,6 +232,9 @@ fn prune(podman: &Podman, remove: bool) -> Result<i32> {
             .remove(&id)
             .with_context(|| format!("removing the sandbox root filesystem {id}"))?;
         println!("Removed the sandbox root filesystem {id}");
+        for problem in remove_sandbox_networks(podman, &id) {
+            println!("  kept the project network {problem}");
+        }
     }
     Ok(0)
 }

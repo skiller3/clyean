@@ -20,6 +20,7 @@ use crate::container::{
 };
 use crate::environment::{HostPathMapper, Topology};
 use crate::herdr::{self, HerdrHostContext};
+use crate::network::ProjectNetwork;
 use crate::roots::SandboxLocation;
 
 /// Labels that identify the User Assistant containers of every project.
@@ -52,6 +53,9 @@ pub struct LaunchContext {
     /// Clyean's host configuration directory, which holds the relay file.  Every container
     /// gets an empty filesystem over it when the workspace contains it.
     pub host_config_dir: PathBuf,
+    /// The project network that the User Assistant's and sub-agents' containers join,
+    /// once it exists.
+    pub network: Option<ProjectNetwork>,
 }
 
 /// How an agent participates in work, which decides its interactivity and identity.
@@ -265,6 +269,14 @@ impl LaunchContext {
             environment,
             tty: false,
             remove_on_exit: true,
+            network: match role {
+                LaunchRole::Maintenance => None,
+                _ => self
+                    .network
+                    .as_ref()
+                    .map(|network| network.name().to_string()),
+            },
+            network_aliases: Vec::new(),
             extra_run_args: self.config.sandbox.podman_run_args.clone(),
             command,
             detach_keys: match self.sandbox.topology {
@@ -546,6 +558,7 @@ mod tests {
             host_paths: HostPathMapper::Identity,
             git_settings: vec![("core.autocrlf".into(), "input".into())],
             host_config_dir: PathBuf::from("/home/skyei/.config/clyean"),
+            network: Some(ProjectNetwork::for_project(&ProjectId::of(Path::new("/p")))),
         }
     }
 
@@ -851,5 +864,24 @@ mod tests {
             let spec = context.agent_container_spec(AgentId::Programmer, role, Vec::new());
             assert!(spec.tmpfs_mounts.contains(&mask), "{:?}", spec.tmpfs_mounts);
         }
+    }
+
+    #[test]
+    fn agents_join_the_project_network_and_maintenance_containers_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = context(dir.path());
+        let network = context.network.as_ref().unwrap().name().to_string();
+        let joined = |role: LaunchRole| {
+            let spec = context.agent_container_spec(AgentId::Programmer, role, Vec::new());
+            let args = spec.run_args();
+            args.windows(2)
+                .any(|pair| pair[0] == "--network" && pair[1] == network)
+        };
+        assert!(joined(user_assistant_role("/bridge")));
+        assert!(joined(LaunchRole::SubAgent {
+            work_id: "w".into(),
+            secrets: Vec::new(),
+        }));
+        assert!(!joined(LaunchRole::Maintenance));
     }
 }

@@ -32,7 +32,7 @@ use clyean_sandbox::provisioning::{resolve_sandbox_executable, BRIDGE};
 use clyean_sandbox::rootfs::RootfsMarker;
 use clyean_sandbox::{
     ContainerUser, HerdrHostContext, HostOs, HostPathMapper, LaunchContext, LaunchRole, Podman,
-    PodmanEnvironment, SandboxArchive, SandboxLocation, Topology,
+    PodmanEnvironment, ProjectNetwork, SandboxArchive, SandboxLocation, Topology,
 };
 
 use crate::cli::{ProjectArgs, YesNo, VERSION};
@@ -187,6 +187,29 @@ impl ProjectRuntime {
                 })
                 .collect(),
             host_config_dir: config_dir(),
+            network: None,
+        }
+    }
+
+    /// Creates the project network when missing and joins agents to it, printing why
+    /// agents cannot reach servers when it cannot be used.
+    pub fn attach_project_network(
+        &self,
+        context: &mut LaunchContext,
+        podman_sandbox: &PodmanSandbox,
+    ) {
+        let network = ProjectNetwork::for_project(&self.project_id);
+        match network.ensure(&self.podman, &self.project_id, &podman_sandbox.location.id) {
+            Ok(()) => context.network = Some(network),
+            Err(error) => eprintln!(
+                "warning: the project network could not be created ({error}); agents cannot reach server containers"
+            ),
+        }
+        for warning in clyean_sandbox::network::warnings(
+            &context.config.sandbox.podman_run_args,
+            podman_sandbox.environment.names_resolve,
+        ) {
+            eprintln!("warning: {warning}");
         }
     }
 

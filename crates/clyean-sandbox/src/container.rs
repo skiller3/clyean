@@ -117,6 +117,9 @@ pub struct AgentContainerSpec {
     pub environment: Vec<(String, String)>,
     pub tty: bool,
     pub remove_on_exit: bool,
+    /// The project network the container joins, and the names it answers to there.
+    pub network: Option<String>,
+    pub network_aliases: Vec<String>,
     pub extra_run_args: Vec<String>,
     pub command: Vec<String>,
     /// The key sequence that detaches from the container's terminal: empty, which turns
@@ -167,6 +170,14 @@ impl AgentContainerSpec {
         for (key, value) in &self.environment {
             args.push("--env".into());
             args.push(format!("{key}={value}"));
+        }
+        if let Some(network) = &self.network {
+            args.push("--network".into());
+            args.push(network.clone());
+            for alias in &self.network_aliases {
+                args.push("--network-alias".into());
+                args.push(alias.clone());
+            }
         }
         args.extend(self.extra_run_args.iter().cloned());
         args.push("--rootfs".into());
@@ -226,6 +237,8 @@ mod tests {
             environment: vec![("CLYEAN_AGENT".into(), "programmer".into())],
             tty: false,
             remove_on_exit: true,
+            network: Some("clyean-abc".into()),
+            network_aliases: vec!["web".into()],
             extra_run_args: vec!["--memory".into(), "4g".into()],
             command: vec!["clyean".into(), "--mode".into(), "rpc".into()],
             detach_keys: "",
@@ -247,6 +260,8 @@ mod tests {
             "type=bind,src=/host/p,dst=/home/skyei/workspace/p",
             "type=tmpfs,dst=/home/skyei/.omp/profiles,notmpcopyup",
             "CLYEAN_AGENT=programmer",
+            "clyean-abc",
+            "web",
             "--memory",
         ] {
             assert!(
